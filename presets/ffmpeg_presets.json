@@ -1,0 +1,29 @@
+{
+    "compress_web": {
+        "format": "mp4",
+        "vcodec": "libx264",
+        "acodec": "aac",
+        "quality": "28",
+        "vbitrate": null,
+        "abitrate": "128k",
+        "description": "Compress video for web sharing (good balance of size and quality)."
+    },
+    "audio_only_mp3": {
+        "format": "mp3",
+        "vcodec": null,
+        "acodec": "libmp3lame",
+        "vbitrate": null,
+        "abitrate": "192k",
+        "description": "Extract audio to MP3 format (high quality)."
+    },
+    "gif_optimized": {
+        "format": "gif",
+        "vcodec": null,
+        "acodec": null,
+        "description": "Create optimized GIF (better quality, smaller size, may be slower)."
+    },
+    "resize_half": {
+        "resize_percentage": 0.5,
+        "description": "Resize video to 50% of original resolution."
+    }
+}
