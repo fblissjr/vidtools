@@ -1,11 +1,15 @@
-import cli  # Import cli for argument parsing
-from utils import check_ffmpeg_installed, run_ffmpeg_command, logger  # Import utils
-import presets
 import sys
-import shlex  # For safely splitting command line arguments
+import subprocess
+import re
+import cli                                          # CLI dispatcher
+from utils import run_ffmpeg_command, check_ffmpeg_installed, logger
+import presets
+import json
+from typing import Sequence
 
-# Re-export presets (rest of the main.py preamble is the same)
+# re-export presets for CLI help
 PRESETS = presets.get_presets()
+
 save_presets_command = presets.save_preset_command
 delete_preset_command = presets.delete_preset
 edit_preset_command = presets.edit_preset_command
@@ -101,36 +105,6 @@ def apply_preset_handler(args):
 
 def list_presets_handler(args): # args not used in list_presets
     list_presets_command() # Call the command function from presets.py
-
-def save_preset_handler(args):
-    preset_name = args.preset_name
-    # In a real implementation, get preset data dynamically from args or last command
-    # For now, using a placeholder/example:
-    if "resize" in sys.argv[1]:
-        preset_data = {
-            "resize_percentage": 0.6, # Example - Hardcoded for resize percentage 0.6
-            "description": "Example preset - resize to 60%"
-        }
-    elif "convert" in sys.argv[1]:
-        preset_data = {
-            "format": "mp4",
-            "vcodec": "libx265", # Example - Hardcoded for x265
-            "quality": "25",
-            "description": "Example preset - convert to x265 MP4"
-        }
-    else:
-        print("Error: Cannot infer preset settings from the current command (save_preset context limited in this version).")
-        return
-    save_presets_command(preset_name, preset_data) # Call the command function from presets.py
-
-def delete_preset_handler(args):
-    preset_name = args.preset_name
-    delete_preset_command(preset_name) # Call the command function from presets.py
-
-def edit_preset_handler(args):
-    preset_name = args.preset_name
-    edit_preset_command(preset_name) # Call the command function from presets.py
-
 
 # --- Core FFmpeg Functions (Orchestrated by Handlers) ---
 
@@ -290,7 +264,11 @@ def save_preset_handler(args):
     command_name = current_command_line[0] # e.g., "resize", "convert"
 
     # 2. Get the argparse parser from cli.py
-    arg_parser = cli.arg_parser  # Access the global parser from cli.py
+    try:
+        arg_parser = cli.get_parser()  # Use function call instead of direct attribute access
+    except AttributeError:
+        print("Error: Unable to access command line parser.")
+        return
 
     try:
         # 3. Re-parse the command line, but only the relevant part for the command
@@ -298,7 +276,7 @@ def save_preset_handler(args):
             command_args = arg_parser.parse_args(current_command_line) # Parse based on the *entire* current command line
         except SystemExit as e: # Catch argparse's exit on error
             if e.code == 2: # Exit code 2 usually indicates parsing error
-                print(f"Error: Invalid command line for saving preset. Please check your command and options before using 'save_preset'. Run with '-h' or '--help' for usage.")
+                print("Error: Invalid command line for saving preset. Please check your command and options before using 'save_preset'. Run with '-h' or '--help' for usage.")
                 return
             else:
                 raise # Re-raise other SystemExit exceptions
@@ -307,69 +285,7 @@ def save_preset_handler(args):
         preset_data = {}
         description_parts = [] # For building more informative descriptions
 
-        if command_name == "resize":
-            if command_args.percentage is not None:
-                preset_data["resize_percentage"] = command_args.percentage
-                description_parts.append(f"Resize by {command_args.percentage*100}%")
-            elif command_args.width is not None:
-                preset_data["width"] = command_args.width
-                preset_data["height"] = command_args.height or -1 # Save height if specified, -1 if auto
-                description_parts.append(f"Resize to {command_args.width}x{command_args.height if command_args.height else 'auto'}")
-            preset_data["algorithm"] = command_args.algorithm
-            description_parts.append(f"Algorithm: {command_args.algorithm}")
-
-
-        elif command_name == "convert":
-            preset_data["format"] = command_args.format
-            description_parts.append(f"Convert to {command_args.format}")
-            if command_args.vcodec:
-                preset_data["vcodec"] = command_args.vcodec
-                description_parts.append(f"Video Codec: {command_args.vcodec}")
-            if command_args.acodec:
-                preset_data["acodec"] = command_args.acodec
-                description_parts.append(f"Audio Codec: {command_args.acodec}")
-            if command_args.vbitrate:
-                preset_data["vbitrate"] = command_args.vbitrate
-                description_parts.append(f"Video Bitrate: {command_args.vbitrate}")
-            if command_args.abitrate:
-                preset_data["abitrate"] = command_args.abitrate
-                description_parts.append(f"Audio Bitrate: {command_args.abitrate}")
-            if command_args.quality:
-                preset_data["quality"] = command_args.quality
-                description_parts.append(f"Quality: {command_args.quality}")
-
-
-        elif command_name == "extract_audio":
-            preset_data["aformat"] = command_args.aformat
-            description_parts.append(f"Extract Audio (Format: {command_args.aformat})")
-
-        elif command_name == "extract_frames":
-            preset_data["rate"] = command_args.rate
-            preset_data["iformat"] = command_args.iformat
-            description_parts.append(f"Extract Frames (Rate: {command_args.rate}, Format: {command_args.iformat})")
-
-        elif command_name == "crop":
-            preset_data["width"] = command_args.width
-            preset_data["height"] = command_args.height
-            preset_data["x"] = command_args.x
-            preset_data["y"] = command_args.y
-            description_parts.append(f"Crop to {command_args.width}x{command_args.height} at {command_args.x},{command_args.y}")
-
-        elif command_name == "rotate":
-            preset_data["rotation"] = command_args.rotation
-            description_parts.append(f"Rotate {command_args.rotation} degrees")
-
-        elif command_name == "concatenate":
-            preset_data["description"] = "Concatenate Videos" # Basic description, inputs are implied to be specified at runtime
-
-        elif command_name == "subtitles":
-            preset_data["description"] = "Add Subtitles (burn-in)" # Basic description, subtitle file implied at runtime
-
-
-        else:
-            print(f"Warning: 'save_preset' is not fully implemented for command: {command_name}. Only basic presets may be saved.")
-            description_parts.append(f"Preset for {command_name} (basic)")
-
+        preset_data = _extract_preset_data_for_command(command_name, command_args, description_parts)
 
         preset_data["description"] = ", ".join(description_parts) or preset_name # Use preset name as description if no specific options
 
@@ -388,10 +304,116 @@ def save_preset_handler(args):
         else:
             print("Error: Could not extract any preset settings from the command line.")
 
-
     except Exception as e:
         print(f"Error processing 'save_preset' command: {e}")
         logger.exception("Error in save_preset_handler")
+
+
+def _extract_preset_data_for_command(command_name, command_args, description_parts):
+    """Extract preset data based on command name and arguments."""
+    preset_data = {}
+
+    if command_name == "resize":
+        preset_data = _extract_resize_preset_data(command_args, description_parts)
+    elif command_name == "convert":
+        preset_data = _extract_convert_preset_data(command_args, description_parts)
+    elif command_name == "extract_audio":
+        preset_data = _extract_audio_preset_data(command_args, description_parts)
+    elif command_name == "extract_frames":
+        preset_data = _extract_frames_preset_data(command_args, description_parts)
+    elif command_name == "crop":
+        preset_data = _extract_crop_preset_data(command_args, description_parts)
+    elif command_name == "rotate":
+        preset_data = _extract_rotate_preset_data(command_args, description_parts)
+    elif command_name == "concatenate":
+        preset_data["description"] = "Concatenate Videos"
+    elif command_name == "subtitles":
+        preset_data["description"] = "Add Subtitles (burn-in)"
+    else:
+        print(f"Warning: 'save_preset' is not fully implemented for command: {command_name}. Only basic presets may be saved.")
+        description_parts.append(f"Preset for {command_name} (basic)")
+
+    return preset_data
+
+
+def _extract_resize_preset_data(command_args, description_parts):
+    """Extract preset data for resize command."""
+    preset_data = {}
+
+    if command_args.percentage is not None:
+        preset_data["resize_percentage"] = command_args.percentage
+        description_parts.append(f"Resize by {command_args.percentage*100}%")
+    elif command_args.width is not None:
+        preset_data["width"] = command_args.width
+        preset_data["height"] = command_args.height or -1
+        description_parts.append(f"Resize to {command_args.width}x{command_args.height if command_args.height else 'auto'}")
+
+    preset_data["algorithm"] = command_args.algorithm
+    description_parts.append(f"Algorithm: {command_args.algorithm}")
+
+    return preset_data
+
+
+def _extract_convert_preset_data(command_args, description_parts):
+    """Extract preset data for convert command."""
+    preset_data = {}
+
+    preset_data["format"] = command_args.format
+    description_parts.append(f"Convert to {command_args.format}")
+
+    if command_args.vcodec:
+        preset_data["vcodec"] = command_args.vcodec
+        description_parts.append(f"Video Codec: {command_args.vcodec}")
+    if command_args.acodec:
+        preset_data["acodec"] = command_args.acodec
+        description_parts.append(f"Audio Codec: {command_args.acodec}")
+    if command_args.vbitrate:
+        preset_data["vbitrate"] = command_args.vbitrate
+        description_parts.append(f"Video Bitrate: {command_args.vbitrate}")
+    if command_args.abitrate:
+        preset_data["abitrate"] = command_args.abitrate
+        description_parts.append(f"Audio Bitrate: {command_args.abitrate}")
+    if command_args.quality:
+        preset_data["quality"] = command_args.quality
+        description_parts.append(f"Quality: {command_args.quality}")
+
+    return preset_data
+
+
+def _extract_audio_preset_data(command_args, description_parts):
+    """Extract preset data for extract_audio command."""
+    preset_data = {}
+    preset_data["aformat"] = command_args.aformat
+    description_parts.append(f"Extract Audio (Format: {command_args.aformat})")
+    return preset_data
+
+
+def _extract_frames_preset_data(command_args, description_parts):
+    """Extract preset data for extract_frames command."""
+    preset_data = {}
+    preset_data["rate"] = command_args.rate
+    preset_data["iformat"] = command_args.iformat
+    description_parts.append(f"Extract Frames (Rate: {command_args.rate}, Format: {command_args.iformat})")
+    return preset_data
+
+
+def _extract_crop_preset_data(command_args, description_parts):
+    """Extract preset data for crop command."""
+    preset_data = {}
+    preset_data["width"] = command_args.width
+    preset_data["height"] = command_args.height
+    preset_data["x"] = command_args.x
+    preset_data["y"] = command_args.y
+    description_parts.append(f"Crop to {command_args.width}x{command_args.height} at {command_args.x},{command_args.y}")
+    return preset_data
+
+
+def _extract_rotate_preset_data(command_args, description_parts):
+    """Extract preset data for rotate command."""
+    preset_data = {}
+    preset_data["rotation"] = command_args.rotation
+    description_parts.append(f"Rotate {command_args.rotation} degrees")
+    return preset_data
 
 
 def validate_preset_data(preset_data, command_name):
@@ -424,15 +446,100 @@ def validate_preset_data(preset_data, command_name):
     logger.debug("Preset data validated successfully", command=command_name, data=preset_data)
     return True
 
-def main_entry():
-    """Main entry point of the script."""
-    if not check_ffmpeg_installed(): # Use check_ffmpeg_installed from utils
-        print("Error: ffmpeg is not installed or not in your PATH.")
-        print("Please install ffmpeg to use this script.")
-        exit(1)
+# ──────────────────────────── sanitize handler ───────────────────────────────
+def sanitize_video_handler(args) -> None:
+    sanitize_video(
+        input_file=args.input,
+        output_file=args.output,
+        limit=args.limit,
+        noise=args.noise,
+        crf=args.crf,
+        extra_bottom=args.extra_bottom,
+        audio_mode=("none" if args.no_audio else
+                    "aac" if args.aac else
+                    "copy"),
+    )
 
-    args = cli.parse_arguments() # Parse arguments using cli.py
-    cli.handle_command(args) # Handle command using cli.py
+# ───────────────────────────── core implementation ───────────────────────────
+def _probe_dimensions(path: str) -> tuple[int, int]:
+    """Return (width, height) of the first video stream via ffprobe JSON."""
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "json", path],
+        capture_output=True, text=True, check=True)
+    info = json.loads(probe.stdout)["streams"][0]
+    return int(info["width"]), int(info["height"])
+
+
+def sanitize_video(
+    *,
+    input_file: str,
+    output_file: str,
+    limit: int = 24,
+    noise: int = 6,
+    crf: int = 22,
+    extra_bottom: int = 0,
+    audio_mode: str = "copy",          # "copy" | "aac" | "none"
+) -> None:
+    """
+    1. Detect bottom banner with cropdetect (first ≈12 s).
+    2. Trim only height (keep full width), add light grain.
+    3. Strip metadata & SEI, preserve/copy/re-encode audio as requested.
+    """
+    # 1) cropdetect on ≤300 frames
+    detect_cmd: Sequence[str] = [
+        "ffmpeg", "-hide_banner", "-loglevel", "info",
+        "-i", input_file,
+        "-vf", f"cropdetect=limit={limit}:round=2:reset=0",
+        "-frames:v", "300",
+        "-f", "null", "-"
+    ]
+    detect = subprocess.run(detect_cmd, stderr=subprocess.PIPE, text=True)
+    matches = re.findall(r"crop=([0-9:]+)", detect.stderr)
+
+    _, in_h = _probe_dimensions(input_file)
+    if not matches:
+        logger.warning("cropdetect found no banner; keeping full frame")
+        crop_expr = "iw:ih:0:0"
+    else:
+        # Take last (safest) suggestion, but KEEP full width
+        _, h_str, _, _ = matches[-1].split(":")
+        new_h = max(2, (int(h_str) - extra_bottom)) & ~1
+        crop_expr = f"iw:{new_h}:0:0"    # width=iw, x=0, y=0
+        if new_h == in_h:
+            logger.info("No vertical crop needed (banner not detected)")
+
+    vf_chain = f"crop={crop_expr},noise=alls={noise}:allf=t+u"
+
+    # 2) build ffmpeg command
+    cmd: list[str] = [
+        "ffmpeg", "-i", input_file,
+        "-map", "0:v", "-map", "0:a?",
+        "-sn", "-dn",
+        "-map_metadata", "-1", "-map_chapters", "-1",
+        "-vf", vf_chain,
+        "-bsf:v", "filter_units=remove_types=6",
+        "-c:v", "libx264", "-x264-params",
+        "sei=0:open-gop=0:no-scenecut=1",
+        "-crf", str(crf), "-preset", "slow",
+        "-movflags", "+faststart",
+    ]
+
+    if audio_mode == "copy":
+        cmd += ["-c:a", "copy"]
+    elif audio_mode == "aac":
+        cmd += ["-c:a", "aac", "-b:a", "128k"]
+    else:   # "none"
+        cmd += ["-an"]
+
+    cmd.append(output_file)
+    run_ffmpeg_command(cmd)
+
+# ─────────────────────────── CLI entry-point ─────────────────────────────────
+def main_entry() -> None:
+    if not check_ffmpeg_installed():
+        sys.exit("ffmpeg not found in PATH")
+    cli.handle_command(cli.parse_arguments())
 
 if __name__ == "__main__":
     main_entry()
