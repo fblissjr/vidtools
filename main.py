@@ -455,9 +455,8 @@ def sanitize_video_handler(args) -> None:
         noise=args.noise,
         crf=args.crf,
         extra_bottom=args.extra_bottom,
-        audio_mode=("none" if args.no_audio else
-                    "aac" if args.aac else
-                    "copy"),
+        manual_crop=args.manual_crop,
+        audio_mode=("none" if args.no_audio else "aac" if args.aac else "copy"),
     )
 
 # ───────────────────────────── core implementation ───────────────────────────
@@ -479,35 +478,48 @@ def sanitize_video(
     noise: int = 6,
     crf: int = 22,
     extra_bottom: int = 0,
-    audio_mode: str = "copy",          # "copy" | "aac" | "none"
+    manual_crop: str | None = None,
+    audio_mode: str = "copy",  # "copy" | "aac" | "none"
 ) -> None:
     """
     1. Detect bottom banner with cropdetect (first ≈12 s).
     2. Trim only height (keep full width), add light grain.
     3. Strip metadata & SEI, preserve/copy/re-encode audio as requested.
     """
-    # 1) cropdetect on ≤300 frames
-    detect_cmd: Sequence[str] = [
-        "ffmpeg", "-hide_banner", "-loglevel", "info",
-        "-i", input_file,
-        "-vf", f"cropdetect=limit={limit}:round=2:reset=0",
-        "-frames:v", "300",
-        "-f", "null", "-"
-    ]
-    detect = subprocess.run(detect_cmd, stderr=subprocess.PIPE, text=True)
-    matches = re.findall(r"crop=([0-9:]+)", detect.stderr)
-
-    _, in_h = _probe_dimensions(input_file)
-    if not matches:
-        logger.warning("cropdetect found no banner; keeping full frame")
-        crop_expr = "iw:ih:0:0"
+    # If a manual crop expression is provided, use it directly
+    if manual_crop:
+        crop_expr = manual_crop
     else:
-        # Take last (safest) suggestion, but KEEP full width
-        _, h_str, _, _ = matches[-1].split(":")
-        new_h = max(2, (int(h_str) - extra_bottom)) & ~1
-        crop_expr = f"iw:{new_h}:0:0"    # width=iw, x=0, y=0
-        if new_h == in_h:
-            logger.info("No vertical crop needed (banner not detected)")
+        # ── auto‑detect banner with cropdetect ──────────────────────────
+        detect_cmd: Sequence[str] = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "info",
+            "-i",
+            input_file,
+            "-vf",
+            f"cropdetect=limit={limit}:round=2:reset=0",
+            "-frames:v",
+            "300",
+            "-f",
+            "null",
+            "-",
+        ]
+        detect = subprocess.run(detect_cmd, stderr=subprocess.PIPE, text=True)
+        matches = re.findall(r"crop=([0-9:]+)", detect.stderr)
+
+        _, in_h = _probe_dimensions(input_file)
+        if not matches:
+            logger.warning("cropdetect found no banner; keeping full frame")
+            crop_expr = "iw:ih:0:0"
+        else:
+            # Take last (safest) suggestion, keep full width
+            _, h_str, _, _ = matches[-1].split(":")
+            new_h = max(2, (int(h_str) - extra_bottom)) & ~1
+            crop_expr = f"iw:{new_h}:0:0"
+            if new_h == in_h:
+                logger.info("No vertical crop needed (banner not detected)")
 
     vf_chain = f"crop={crop_expr},noise=alls={noise}:allf=t+u"
 
@@ -534,6 +546,20 @@ def sanitize_video(
 
     cmd.append(output_file)
     run_ffmpeg_command(cmd)
+
+
+# ──────────────────────────── merge stub (placeholder) ───────────────────────
+def merge_videos_handler(args):
+    """
+    Placeholder for the 'merge' CLI command.
+
+    The CLI references this symbol to avoid an AttributeError at import time.
+    Full implementation will be added later.
+    """
+    logger.error("merge_videos_handler is not yet implemented.")
+    print("❌  The 'merge' command has not been implemented in this build.")
+    sys.exit(1)
+
 
 # ─────────────────────────── CLI entry-point ─────────────────────────────────
 def main_entry() -> None:
