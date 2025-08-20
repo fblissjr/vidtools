@@ -1,6 +1,7 @@
 import sys
 import subprocess
 import re
+import os
 import cli                                          # CLI dispatcher
 from utils import run_ffmpeg_command, check_ffmpeg_installed, logger
 import presets
@@ -37,40 +38,54 @@ def resize_video_handler(args):
 def convert_format_handler(args):
     input_file = args.input
     output_file = args.output
-    format_type = args.format
-    video_codec = args.vcodec
-    audio_codec = args.acodec
-    video_bitrate = args.vbitrate
-    audio_bitrate = args.abitrate
-    quality_scale = args.quality
-    start_time = args.start_time
-    end_time = args.end_time
-    duration = args.duration
-    convert_format(input_file, output_file, format_type, video_codec, audio_codec, video_bitrate, audio_bitrate, quality_scale, start_time, end_time, duration)
+
+    # Auto-detect format from output extension if not specified
+    format_type = args.format if hasattr(args, 'format') and args.format else None
+    if not format_type:
+        import os
+        ext = os.path.splitext(output_file)[1].lower().lstrip('.')
+        format_type = ext if ext else 'mp4'
+
+    video_codec = args.vcodec if hasattr(args, 'vcodec') else None
+    audio_codec = args.acodec if hasattr(args, 'acodec') else None
+    video_bitrate = args.vbitrate if hasattr(args, 'vbitrate') else None
+    audio_bitrate = args.abitrate if hasattr(args, 'abitrate') else None
+    quality_scale = args.crf if hasattr(args, 'crf') else (args.quality if hasattr(args, 'quality') else None)
+    preset = args.preset if hasattr(args, 'preset') else None
+    use_copy = args.copy if hasattr(args, 'copy') else False
+    start_time = args.start_time if hasattr(args, 'start_time') else None
+    end_time = args.end_time if hasattr(args, 'end_time') else None
+    duration = args.duration if hasattr(args, 'duration') else None
+
+    convert_format(input_file, output_file, format_type, video_codec, audio_codec,
+                   video_bitrate, audio_bitrate, quality_scale, start_time, end_time,
+                   duration, preset=preset, use_copy=use_copy)
 
 def extract_audio_handler(args):
     input_file = args.input
     output_file = args.output
-    audio_format = args.aformat
-    start_time = args.start_time
-    end_time = args.end_time
-    duration = args.duration
+    audio_format = args.format if hasattr(args, 'format') else (args.aformat if hasattr(args, 'aformat') else 'copy')
+    start_time = args.start_time if hasattr(args, 'start_time') else None
+    end_time = args.end_time if hasattr(args, 'end_time') else None
+    duration = args.duration if hasattr(args, 'duration') else None
     extract_audio(input_file, output_file, audio_format, start_time, end_time, duration)
 
 def extract_frames_handler(args):
     input_file = args.input
-    output_pattern = args.output_pattern
-    frame_rate = args.rate
-    image_format = args.iformat
-    start_time = args.start_time
-    end_time = args.end_time
-    duration = args.duration
+    output_pattern = args.output if hasattr(args, 'output') else args.output_pattern
+    frame_rate = args.rate if hasattr(args, 'rate') else 1
+    image_format = args.format if hasattr(args, 'format') else (args.iformat if hasattr(args, 'iformat') else 'image2')
+    start_time = args.start_time if hasattr(args, 'start_time') else None
+    end_time = args.end_time if hasattr(args, 'end_time') else None
+    duration = args.duration if hasattr(args, 'duration') else None
     extract_frames(input_file, output_pattern, frame_rate, image_format, start_time, end_time, duration)
 
 def concatenate_videos_handler(args):
     input_files = args.inputs
     output_file = args.output
-    concatenate_videos(input_files, output_file)
+    use_copy = args.copy if hasattr(args, 'copy') else True
+    reencode = args.reencode if hasattr(args, 'reencode') else False
+    concatenate_videos(input_files, output_file, use_copy=use_copy and not reencode)
 
 def crop_video_handler(args):
     input_file = args.input
@@ -88,7 +103,7 @@ def get_video_info_handler(args):
 def add_subtitles_handler(args):
     input_file = args.input
     output_file = args.output
-    subtitles_file = args.subtitles_file
+    subtitles_file = args.subs if hasattr(args, 'subs') else args.subtitles_file
     add_subtitles(input_file, output_file, subtitles_file)
 
 def rotate_video_handler(args):
@@ -100,68 +115,246 @@ def rotate_video_handler(args):
 def apply_preset_handler(args):
     input_file = args.input
     output_file = args.output
-    preset_name = args.preset_name
+    preset_name = args.name if hasattr(args, 'name') else args.preset_name
     apply_preset(input_file, output_file, preset_name)
+
+def cut_video_handler(args):
+    """Handler for the cut command with ffmpeg best practices."""
+    input_file = args.input
+    output_file = args.output
+    start_time = args.start_time
+    end_time = args.end_time
+    duration = args.duration
+    use_copy = not args.accurate and args.copy
+    fast_seek = args.fast_seek
+    fix_sync = args.fix_sync
+    video_codec = args.video_codec
+    audio_codec = args.audio_codec
+    crf = args.crf
+
+    cut_video(input_file, output_file, start_time=start_time, end_time=end_time,
+              duration=duration, use_copy=use_copy, fast_seek=fast_seek,
+              fix_sync=fix_sync, video_codec=video_codec, audio_codec=audio_codec, crf=crf)
 
 def list_presets_handler(args): # args not used in list_presets
     list_presets_command() # Call the command function from presets.py
 
+def delete_preset_handler(args):
+    preset_name = args.name
+    delete_preset_command(preset_name)
+
+def edit_preset_handler(args):
+    preset_name = args.name
+    edit_preset_command(preset_name)
+
 # --- Core FFmpeg Functions (Orchestrated by Handlers) ---
 
+def cut_video(input_file, output_file, start_time=None, end_time=None, duration=None,
+              use_copy=True, fast_seek=False, fix_sync=False,
+              video_codec=None, audio_codec=None, crf=None):
+    """Cut/trim video following ffmpeg best practices.
+
+    Args:
+        input_file: Input video path
+        output_file: Output video path
+        start_time: Start timestamp (HH:MM:SS or seconds)
+        end_time: End timestamp (absolute time)
+        duration: Duration from start (alternative to end_time)
+        use_copy: Use stream copy for speed (no re-encoding)
+        fast_seek: Place -ss before input (faster but less accurate)
+        fix_sync: Add -async 1 to fix audio sync issues
+        video_codec: Video codec for re-encoding
+        audio_codec: Audio codec for re-encoding
+        crf: Quality for re-encoding
+    """
+    command = ["ffmpeg"]
+
+    # Fast seek (before input) - less accurate but faster
+    if fast_seek and start_time:
+        command.extend(["-ss", str(start_time)])
+
+    command.extend(["-i", input_file])
+
+    # Accurate seek (after input) - more accurate but slower initial seek
+    if not fast_seek and start_time:
+        command.extend(["-ss", str(start_time)])
+
+    # End time or duration
+    if end_time:
+        command.extend(["-to", str(end_time)])
+    elif duration:
+        command.extend(["-t", str(duration)])
+
+    # Codec settings
+    if use_copy:
+        # Stream copy - fastest, no quality loss
+        command.extend(["-c", "copy"])
+        # Avoid re-encoding keyframes at cut points
+        command.extend(["-avoid_negative_ts", "make_zero"])
+    else:
+        # Re-encode for frame-accurate cuts
+        if video_codec:
+            command.extend(["-c:v", video_codec])
+        else:
+            command.extend(["-c:v", "libx264"])
+
+        if audio_codec:
+            command.extend(["-c:a", audio_codec])
+        else:
+            command.extend(["-c:a", "aac"])
+
+        if crf:
+            command.extend(["-crf", str(crf)])
+
+    # Fix audio sync if requested
+    if fix_sync:
+        command.extend(["-async", "1"])
+
+    # Fast start for MP4 (move moov atom to beginning)
+    if output_file.lower().endswith('.mp4'):
+        command.extend(["-movflags", "+faststart"])
+
+    command.append(output_file)
+    run_ffmpeg_command(command)
+
 def resize_video(input_file, output_file, percentage=None, width=None, height=None, algorithm="lanczos"):
-    """Resizes a video using ffmpeg scale filter."""
+    """Resizes a video using ffmpeg scale filter with proper aspect ratio handling."""
     if percentage:
         scale_filter = f"scale=iw*{percentage}:ih*{percentage}:flags={algorithm}"
     elif width and height:
         scale_filter = f"scale={width}:{height}:flags={algorithm}"
     elif width:
-        scale_filter = f"scale={width}:-1:flags={algorithm}"
+        # Maintain aspect ratio, ensure even dimensions
+        scale_filter = f"scale={width}:-2:flags={algorithm}"
     elif height:
-        scale_filter = f"scale=-1:{height}:flags={algorithm}"
+        # Maintain aspect ratio, ensure even dimensions
+        scale_filter = f"scale=-2:{height}:flags={algorithm}"
     else:
         print("Error: You must specify either a percentage or width/height for resizing.")
         return
 
-    command = ["ffmpeg", "-i", input_file, "-vf", scale_filter, output_file]
-    run_ffmpeg_command(command) # Call run_ffmpeg_command from utils
-
-def convert_format(input_file, output_file, format_type, video_codec=None, audio_codec=None, video_bitrate=None, audio_bitrate=None, quality_scale=None, start_time=None, end_time=None, duration=None):
-    """Converts video format using ffmpeg."""
     command = ["ffmpeg", "-i", input_file]
-    if start_time: command.extend(["-ss", str(start_time)])
-    if end_time: command.extend(["-to", str(end_time)])
-    if duration: command.extend(["-t", str(duration)])
+    command.extend(["-vf", scale_filter])
 
-    if format_type == "gif":
-        command.extend(["-vf", "palettegen=stats_mode=diff[pal],[0:v][pal]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"])
+    # Use same codec as source for better quality
+    command.extend(["-c:a", "copy"])  # Copy audio without re-encoding
+
+    # Fast start for MP4
+    if output_file.lower().endswith('.mp4'):
+        command.extend(["-movflags", "+faststart"])
+
+    command.append(output_file)
+    run_ffmpeg_command(command)
+
+def convert_format(input_file, output_file, format_type, video_codec=None, audio_codec=None,
+                   video_bitrate=None, audio_bitrate=None, quality_scale=None,
+                   start_time=None, end_time=None, duration=None, preset=None, use_copy=False):
+    """Converts video format using ffmpeg with optimized settings."""
+    command = ["ffmpeg"]
+
+    # Time range before input for faster seeking if specified
+    if start_time and use_copy:
+        command.extend(["-ss", str(start_time)])
+
+    command.extend(["-i", input_file])
+
+    # Time range after input for accuracy if not using copy
+    if start_time and not use_copy:
+        command.extend(["-ss", str(start_time)])
+    if end_time:
+        command.extend(["-to", str(end_time)])
+    if duration:
+        command.extend(["-t", str(duration)])
+
+    if use_copy and not video_codec and not audio_codec:
+        # Stream copy when possible
+        command.extend(["-c", "copy"])
+    elif format_type == "gif":
+        # Optimized GIF creation with palette
+        command.extend(["-vf", "fps=10,scale=320:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"])
     elif format_type == "mp3":
-        command.extend(["-vn", "-ab", audio_bitrate or "128k", "-ar", "44100"])
+        command.extend(["-vn"])  # No video
+        command.extend(["-c:a", audio_codec or "libmp3lame"])
+        command.extend(["-b:a", audio_bitrate or "192k"])
+        command.extend(["-ar", "44100"])
     elif format_type == "webm":
-        command.extend(["-c:v", video_codec or "libvpx-vp9", "-crf", quality_scale or "30", "-b:v", video_bitrate or "0", "-b:a", audio_bitrate or "128k"])
+        command.extend(["-c:v", video_codec or "libvpx-vp9"])
+        command.extend(["-crf", quality_scale or "30"])
+        command.extend(["-b:v", video_bitrate or "0"])
+        command.extend(["-c:a", audio_codec or "libopus"])
+        command.extend(["-b:a", audio_bitrate or "128k"])
     elif format_type == "avi":
-        command.extend(["-c:v", video_codec or "libxvid", "-qscale:v", quality_scale or "5", "-c:a", audio_codec or "libmp3lame"])
-    elif format_type == "mp4":
-        if video_codec: command.extend(["-c:v", video_codec])
-        if audio_codec: command.extend(["-c:a", audio_codec])
-        if video_bitrate: command.extend(["-b:v", video_bitrate])
-        if audio_bitrate: command.extend(["-b:a", audio_bitrate])
-        if quality_scale and video_codec in ("libx264", "libx265"):
-            command.extend(["-crf", quality_scale])
-    else:
-        print(f"Error: Unsupported format type: {format_type}")
-        return
+        command.extend(["-c:v", video_codec or "libxvid"])
+        command.extend(["-qscale:v", quality_scale or "5"])
+        command.extend(["-c:a", audio_codec or "libmp3lame"])
+    else:  # Default settings for MP4 and others
+        if video_codec:
+            command.extend(["-c:v", video_codec])
+        elif not use_copy:
+            command.extend(["-c:v", "libx264"])  # Default to H.264
+
+        if audio_codec:
+            command.extend(["-c:a", audio_codec])
+        elif not use_copy:
+            command.extend(["-c:a", "aac"])  # Default to AAC
+
+        if video_bitrate:
+            command.extend(["-b:v", video_bitrate])
+        if audio_bitrate:
+            command.extend(["-b:a", audio_bitrate])
+
+        # Quality settings
+        if quality_scale:
+            command.extend(["-crf", str(quality_scale)])
+        elif not use_copy and not video_bitrate:
+            command.extend(["-crf", "23"])  # Default quality
+
+    # Encoding preset for speed vs compression trade-off
+    if preset and not use_copy:
+        command.extend(["-preset", preset])
+
+    # Fast start for MP4 files
+    if format_type == "mp4" or output_file.lower().endswith('.mp4'):
+        command.extend(["-movflags", "+faststart"])
 
     command.append(output_file)
     run_ffmpeg_command(command) # Call run_ffmpeg_command from utils
 
 def extract_audio(input_file, output_file, audio_format="copy", start_time=None, end_time=None, duration=None):
-    """Extracts audio from video using ffmpeg."""
-    command = ["ffmpeg", "-i", input_file]
-    if start_time: command.extend(["-ss", str(start_time)])
-    if end_time: command.extend(["-to", str(end_time)])
-    if duration: command.extend(["-t", str(duration)])
-    command.extend(["-vn", "-acodec", audio_format, output_file])
-    run_ffmpeg_command(command) # Call run_ffmpeg_command from utils
+    """Extracts audio from video using ffmpeg with best practices."""
+    command = ["ffmpeg"]
+
+    # Fast seek for copy operations
+    if start_time and audio_format == "copy":
+        command.extend(["-ss", str(start_time)])
+
+    command.extend(["-i", input_file])
+
+    # Accurate seek for re-encoding
+    if start_time and audio_format != "copy":
+        command.extend(["-ss", str(start_time)])
+    if end_time:
+        command.extend(["-to", str(end_time)])
+    if duration:
+        command.extend(["-t", str(duration)])
+
+    # No video stream
+    command.extend(["-vn"])
+
+    # Audio codec
+    if audio_format == "copy":
+        command.extend(["-c:a", "copy"])
+    elif audio_format == "mp3":
+        command.extend(["-c:a", "libmp3lame", "-b:a", "192k"])
+    elif audio_format == "aac":
+        command.extend(["-c:a", "aac", "-b:a", "128k"])
+    elif audio_format == "flac":
+        command.extend(["-c:a", "flac"])
+    else:
+        command.extend(["-c:a", audio_format])
+
+    command.append(output_file)
+    run_ffmpeg_command(command)
 
 def extract_frames(input_file, output_pattern, frame_rate=1, image_format="image2", start_time=None, end_time=None, duration=None):
     """Extracts frames from video using ffmpeg."""
@@ -172,26 +365,52 @@ def extract_frames(input_file, output_pattern, frame_rate=1, image_format="image
     command.extend(["-r", str(frame_rate), "-f", image_format, output_pattern])
     run_ffmpeg_command(command) # Call run_ffmpeg_command from utils
 
-def concatenate_videos(input_files, output_file):
-    """Concatenates video files using ffmpeg concat protocol."""
-    list_file_path = "concat_list.txt"
+
+def concatenate_videos(input_files, output_file, use_copy=True):
+    """Concatenates video files using ffmpeg concat demuxer.
+
+    Args:
+        input_files: List of input video paths
+        output_file: Output video path
+        use_copy: Use stream copy (requires same codec parameters)
+    """
+    import tempfile
+
+    # Create temporary file for concat list
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        list_file_path = f.name
+        for file in input_files:
+            # Use absolute paths and escape single quotes
+            abs_path = os.path.abspath(file)
+            escaped_path = abs_path.replace("'", "\\'")  # Line 388
+            f.write(f"file '{escaped_path}'\n")           # Line 389
+
     try:
-        with open(list_file_path, "w") as f:
-            for file in input_files:
-                f.write(f"file '{file}'\n")
-        command = ["ffmpeg", "-f", "concat", "-safe", "0", "-i", list_file_path, "-c", "copy", output_file]
-        run_ffmpeg_command(command) # Call run_ffmpeg_command from utils
-    except Exception as e:
-        print(f"Error creating or using list file: {e}")
+        command = ["ffmpeg", "-f", "concat", "-safe", "0", "-i", list_file_path]
+
+        if use_copy:
+            command.extend(["-c", "copy"])
+        else:
+            # Re-encode to handle different codecs
+            command.extend(["-c:v", "libx264", "-c:a", "aac", "-crf", "23"])
+
+        # Fast start for MP4
+        if output_file.lower().endswith('.mp4'):
+            command.extend(["-movflags", "+faststart"])
+
+        command.append(output_file)
+        run_ffmpeg_command(command)
     finally:
+        # Clean up temp file
         if os.path.exists(list_file_path):
             os.remove(list_file_path)
+
 
 def crop_video(input_file, output_file, width, height, x, y):
     """Crops a video using ffmpeg crop filter."""
     crop_filter = f"crop={width}:{height}:{x}:{y}"
     command = ["ffmpeg", "-i", input_file, "-vf", crop_filter, output_file]
-    run_ffmpeg_command(command) # Call run_ffmpeg_command from utils
+    run_ffmpeg_command(command)  # Call run_ffmpeg_command from utils
 
 def get_video_info(input_file):
     """Gets video information using ffprobe."""
