@@ -1,7 +1,7 @@
 import json
 import os
 from typing import Dict, Any
-from utils import logger  # Import logger from utils
+from .utils import logger  # Import logger from utils
 
 # --- Configuration and Presets ---
 PRESET_FOLDER = "presets"  # Define the folder name

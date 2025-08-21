@@ -1,0 +1,6 @@
+# Core dependencies
+tqdm>=4.65.0
+structlog>=23.1.0
+
+# Optional: TUI support
+# textual>=0.40.0  # Uncomment if you want TUI support

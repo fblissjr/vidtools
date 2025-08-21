@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vidtools"
+version = "0.1.0"
+description = "A comprehensive FFmpeg wrapper for common video processing tasks"
+readme = "README.md"
+license = {file = "LICENSE"}
+]
+requires-python = ">=3.8"
+dependencies = [
+    "tqdm>=4.65.0",
+    "structlog>=23.1.0",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Multimedia :: Video :: Conversion",
+]
+keywords = ["ffmpeg", "video", "conversion", "editing", "multimedia"]
+
+[project.optional-dependencies]
+tui = ["textual>=0.40.0"]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+
+[project.scripts]
+vidtools = "vidtools.cli:main"
+vt = "vidtools.cli:main"  # Short alias
+
+[project.urls]
+Homepage = "https://github.com/fredbliss/vidtools"
+Repository = "https://github.com/fredbliss/vidtools"
+Issues = "https://github.com/fredbliss/vidtools/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vidtools*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py38"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

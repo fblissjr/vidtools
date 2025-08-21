@@ -1,6 +1,7 @@
 import argparse
-from utils import is_valid_file  # helper for path checks
-import main  # command handlers live here
+import sys
+from .utils import is_valid_file, check_ffmpeg_installed  # helper for path checks
+from . import main as main_module  # command handlers live here
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -49,7 +50,7 @@ def setup_argparse() -> argparse.ArgumentParser:
         ],
         help="FFmpeg scale flags (default: lanczos)",
     )
-    resize_parser.set_defaults(func=main.resize_video_handler)
+    resize_parser.set_defaults(func=main_module.resize_video_handler)
 
     # ---------------------------------------------------------------- sanitize
     sanitize = subparsers.add_parser(
@@ -89,7 +90,7 @@ def setup_argparse() -> argparse.ArgumentParser:
     )
     sanitize.add_argument("--no-audio", action="store_true",
                           help="Strip audio stream entirely")
-    sanitize.set_defaults(func=main.sanitize_video_handler)
+    sanitize.set_defaults(func=main_module.sanitize_video_handler)
 
     # ---------------------------------------------------------------- merge ---
     merge = subparsers.add_parser(
@@ -147,7 +148,7 @@ def setup_argparse() -> argparse.ArgumentParser:
         default="slow",
         help="x264 preset (default: slow)",
     )
-    merge.set_defaults(func=main.merge_videos_handler)
+    merge.set_defaults(func=main_module.merge_videos_handler)
 
     # ---------------------------------------------------------------- cut -----
     cut = subparsers.add_parser(
@@ -226,7 +227,7 @@ Time formats: HH:MM:SS.mmm, seconds (66.5), or MM:SS"""
         type=int,
         help="CRF quality for re-encoding (0-51, lower is better)"
     )
-    cut.set_defaults(func=main.cut_video_handler)
+    cut.set_defaults(func=main_module.cut_video_handler)
 
     # ---------------------------------------------------------------- convert -
     convert = subparsers.add_parser(
@@ -276,7 +277,7 @@ Examples:
     convert.add_argument("--start", dest="start_time", help="Start time")
     convert.add_argument("--end", dest="end_time", help="End time")
     convert.add_argument("--duration", help="Duration")
-    convert.set_defaults(func=main.convert_format_handler)
+    convert.set_defaults(func=main_module.convert_format_handler)
 
     # ---------------------------------------------------------------- extract-audio
     extract_audio = subparsers.add_parser(
@@ -294,7 +295,7 @@ Examples:
     extract_audio.add_argument("--start", dest="start_time", help="Start time")
     extract_audio.add_argument("--end", dest="end_time", help="End time")
     extract_audio.add_argument("--duration", help="Duration")
-    extract_audio.set_defaults(func=main.extract_audio_handler)
+    extract_audio.set_defaults(func=main_module.extract_audio_handler)
 
     # ---------------------------------------------------------------- extract-frames
     extract_frames = subparsers.add_parser(
@@ -321,7 +322,7 @@ Examples:
     extract_frames.add_argument("--start", dest="start_time", help="Start time")
     extract_frames.add_argument("--end", dest="end_time", help="End time")
     extract_frames.add_argument("--duration", help="Duration")
-    extract_frames.set_defaults(func=main.extract_frames_handler)
+    extract_frames.set_defaults(func=main_module.extract_frames_handler)
 
     # ---------------------------------------------------------------- concat ---
     concat = subparsers.add_parser(
@@ -349,7 +350,7 @@ Note: For stream copy mode, all inputs must have the same codec parameters."""
         action="store_true",
         help="Re-encode videos (slower, handles different codecs)"
     )
-    concat.set_defaults(func=main.concatenate_videos_handler)
+    concat.set_defaults(func=main_module.concatenate_videos_handler)
 
     # ---------------------------------------------------------------- crop ----
     crop = subparsers.add_parser(
@@ -363,7 +364,7 @@ Note: For stream copy mode, all inputs must have the same codec parameters."""
     crop.add_argument("-H", "--height", type=int, required=True, help="Crop height")
     crop.add_argument("-x", type=int, default=0, help="X offset (default: 0)")
     crop.add_argument("-y", type=int, default=0, help="Y offset (default: 0)")
-    crop.set_defaults(func=main.crop_video_handler)
+    crop.set_defaults(func=main_module.crop_video_handler)
 
     # ---------------------------------------------------------------- rotate --
     rotate = subparsers.add_parser(
@@ -379,7 +380,7 @@ Note: For stream copy mode, all inputs must have the same codec parameters."""
         choices=["90", "180", "270", "-90"],
         help="Rotation angle in degrees"
     )
-    rotate.set_defaults(func=main.rotate_video_handler)
+    rotate.set_defaults(func=main_module.rotate_video_handler)
 
     # ---------------------------------------------------------------- subtitles
     subtitles = subparsers.add_parser(
@@ -395,7 +396,7 @@ Note: For stream copy mode, all inputs must have the same codec parameters."""
         type=lambda x: is_valid_file(subtitles, x),
         help="Subtitle file (.srt, .ass, etc.)"
     )
-    subtitles.set_defaults(func=main.add_subtitles_handler)
+    subtitles.set_defaults(func=main_module.add_subtitles_handler)
 
     # ---------------------------------------------------------------- info ----
     info = subparsers.add_parser(
@@ -409,7 +410,7 @@ Note: For stream copy mode, all inputs must have the same codec parameters."""
         action="store_true",
         help="Output in JSON format"
     )
-    info.set_defaults(func=main.get_video_info_handler)
+    info.set_defaults(func=main_module.get_video_info_handler)
 
     # ---------------------------------------------------------------- presets -
     preset_parser = subparsers.add_parser(
@@ -423,26 +424,26 @@ Note: For stream copy mode, all inputs must have the same codec parameters."""
     apply.add_argument("input", type=lambda x: is_valid_file(apply, x))
     apply.add_argument("output")
     apply.add_argument("name", help="Preset name")
-    apply.set_defaults(func=main.apply_preset_handler)
+    apply.set_defaults(func=main_module.apply_preset_handler)
 
     # List presets
     list_p = preset_sub.add_parser("list", help="List available presets")
-    list_p.set_defaults(func=main.list_presets_handler)
+    list_p.set_defaults(func=main_module.list_presets_handler)
 
     # Save preset
     save = preset_sub.add_parser("save", help="Save current command as preset")
     save.add_argument("name", help="Preset name")
-    save.set_defaults(func=main.save_preset_handler)
+    save.set_defaults(func=main_module.save_preset_handler)
 
     # Delete preset
     delete = preset_sub.add_parser("delete", help="Delete a preset")
     delete.add_argument("name", help="Preset name")
-    delete.set_defaults(func=main.delete_preset_handler)
+    delete.set_defaults(func=main_module.delete_preset_handler)
 
     # Edit preset
     edit = preset_sub.add_parser("edit", help="Edit preset file")
     edit.add_argument("name", help="Preset name")
-    edit.set_defaults(func=main.edit_preset_handler)
+    edit.set_defaults(func=main_module.edit_preset_handler)
 
     return parser
 
@@ -465,5 +466,11 @@ def handle_command(args: argparse.Namespace) -> None:
         _parser.print_help()
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the CLI."""
+    if not check_ffmpeg_installed():
+        sys.exit("Error: ffmpeg not found in PATH. Please install ffmpeg first.")
     handle_command(parse_arguments())
+
+if __name__ == "__main__":
+    main()

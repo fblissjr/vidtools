@@ -2,11 +2,12 @@ import sys
 import subprocess
 import re
 import os
-import cli                                          # CLI dispatcher
-from utils import run_ffmpeg_command, check_ffmpeg_installed, logger
-import presets
 import json
+import tempfile
 from typing import Sequence
+
+from .utils import run_ffmpeg_command, check_ffmpeg_installed, logger
+from . import presets
 
 # re-export presets for CLI help
 PRESETS = presets.get_presets()
@@ -484,8 +485,9 @@ def save_preset_handler(args):
 
     # 2. Get the argparse parser from cli.py
     try:
+        from . import cli
         arg_parser = cli.get_parser()  # Use function call instead of direct attribute access
-    except AttributeError:
+    except (AttributeError, ImportError):
         print("Error: Unable to access command line parser.")
         return
 
@@ -781,10 +783,4 @@ def merge_videos_handler(args):
 
 
 # ─────────────────────────── CLI entry-point ─────────────────────────────────
-def main_entry() -> None:
-    if not check_ffmpeg_installed():
-        sys.exit("ffmpeg not found in PATH")
-    cli.handle_command(cli.parse_arguments())
-
-if __name__ == "__main__":
-    main_entry()
+# Entry point moved to cli.py for package structure
