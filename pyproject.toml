@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A comprehensive FFmpeg wrapper for common video processing tasks"
 readme = "README.md"
 license = {file = "LICENSE"}
-]
+
 requires-python = ">=3.8"
 dependencies = [
     "tqdm>=4.65.0",
