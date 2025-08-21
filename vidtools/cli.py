@@ -412,6 +412,64 @@ Note: For stream copy mode, all inputs must have the same codec parameters."""
     )
     info.set_defaults(func=main_module.get_video_info_handler)
 
+    # ---------------------------------------------------------------- batch ---
+    batch = subparsers.add_parser(
+        "batch",
+        help="Batch process multiple files",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description="""Batch process multiple files with the same operation.
+
+Examples:
+  # Convert all webp files to mp4
+  %(prog)s convert "*.webp" --format mp4
+  
+  # Resize all videos in a folder to 50%%
+  %(prog)s resize "videos/*.mp4" --scale 0.5
+  
+  # Extract audio from all videos
+  %(prog)s extract-audio "*.mp4" --format mp3
+  
+  # Cut same segment from multiple videos
+  %(prog)s cut "*.mp4" --start 10 --duration 30"""
+    )
+    batch_sub = batch.add_subparsers(dest="batch_operation", help="Operation to perform")
+    
+    # Batch convert
+    batch_convert = batch_sub.add_parser("convert", help="Batch convert files")
+    batch_convert.add_argument("pattern", help="File pattern (e.g., '*.webp')")
+    batch_convert.add_argument("-f", "--format", help="Output format (auto-detect from extension if not set)")
+    batch_convert.add_argument("-o", "--output-dir", help="Output directory (default: same as source)")
+    batch_convert.add_argument("--suffix", help="Add suffix to output filename (e.g., '_converted')")
+    batch_convert.add_argument("--overwrite", action="store_true", help="Overwrite existing files")
+    batch_convert.set_defaults(func=main_module.batch_convert_handler)
+    
+    # Batch resize
+    batch_resize = batch_sub.add_parser("resize", help="Batch resize videos")
+    batch_resize.add_argument("pattern", help="File pattern")
+    batch_resize.add_argument("-s", "--scale", type=float, help="Scale factor (e.g., 0.5)")
+    batch_resize.add_argument("-w", "--width", type=int, help="Target width")
+    batch_resize.add_argument("-h", "--height", type=int, help="Target height")
+    batch_resize.add_argument("-o", "--output-dir", help="Output directory")
+    batch_resize.add_argument("--suffix", default="_resized", help="Add suffix to filename")
+    batch_resize.set_defaults(func=main_module.batch_resize_handler)
+    
+    # Batch cut
+    batch_cut = batch_sub.add_parser("cut", help="Batch cut videos")
+    batch_cut.add_argument("pattern", help="File pattern")
+    batch_cut.add_argument("--start", help="Start time")
+    batch_cut.add_argument("--end", help="End time")
+    batch_cut.add_argument("--duration", help="Duration")
+    batch_cut.add_argument("-o", "--output-dir", help="Output directory")
+    batch_cut.add_argument("--suffix", default="_cut", help="Add suffix to filename")
+    batch_cut.set_defaults(func=main_module.batch_cut_handler)
+    
+    # Batch extract audio
+    batch_audio = batch_sub.add_parser("extract-audio", help="Batch extract audio")
+    batch_audio.add_argument("pattern", help="File pattern")
+    batch_audio.add_argument("-f", "--format", default="mp3", help="Audio format (default: mp3)")
+    batch_audio.add_argument("-o", "--output-dir", help="Output directory")
+    batch_audio.set_defaults(func=main_module.batch_extract_audio_handler)
+
     # ---------------------------------------------------------------- presets -
     preset_parser = subparsers.add_parser(
         "preset",

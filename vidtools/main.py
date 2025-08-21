@@ -782,5 +782,187 @@ def merge_videos_handler(args):
     sys.exit(1)
 
 
+# ──────────────────────────── batch handlers ─────────────────────────────────
+def batch_convert_handler(args):
+    """Handle batch convert operations."""
+    import glob
+    from pathlib import Path
+    
+    pattern = args.pattern
+    output_format = args.format
+    output_dir = args.output_dir
+    suffix = args.suffix or ""
+    overwrite = args.overwrite
+    
+    files = glob.glob(pattern)
+    if not files:
+        print(f"No files found matching pattern: {pattern}")
+        return
+    
+    print(f"Found {len(files)} files to convert")
+    success_count = 0
+    
+    for input_file in files:
+        input_path = Path(input_file)
+        
+        # Determine output format
+        if output_format:
+            ext = output_format if output_format.startswith('.') else f'.{output_format}'
+        else:
+            # Try to guess from common conversions
+            if input_path.suffix.lower() in ['.webp', '.png', '.jpg', '.jpeg']:
+                ext = '.mp4'  # Convert images to video
+            else:
+                print(f"Cannot auto-detect format for {input_file}, skipping")
+                continue
+        
+        # Determine output path
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            output_file = Path(output_dir) / f"{input_path.stem}{suffix}{ext}"
+        else:
+            output_file = input_path.with_name(f"{input_path.stem}{suffix}{ext}")
+        
+        # Skip if exists and not overwriting
+        if output_file.exists() and not overwrite:
+            print(f"Skipping {input_file} (output exists)")
+            continue
+        
+        print(f"Converting: {input_file} -> {output_file}")
+        
+        try:
+            # Auto-detect format from extension
+            format_type = ext.lstrip('.')
+            convert_format(str(input_file), str(output_file), format_type)
+            success_count += 1
+            print(f"  ✓ Success")
+        except Exception as e:
+            print(f"  ✗ Failed: {e}")
+    
+    print(f"\nBatch conversion complete: {success_count}/{len(files)} successful")
+
+def batch_resize_handler(args):
+    """Handle batch resize operations."""
+    import glob
+    from pathlib import Path
+    
+    pattern = args.pattern
+    scale = args.scale
+    width = args.width
+    height = args.height
+    output_dir = args.output_dir
+    suffix = args.suffix
+    
+    files = glob.glob(pattern)
+    if not files:
+        print(f"No files found matching pattern: {pattern}")
+        return
+    
+    print(f"Found {len(files)} files to resize")
+    success_count = 0
+    
+    for input_file in files:
+        input_path = Path(input_file)
+        
+        # Determine output path
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            output_file = Path(output_dir) / f"{input_path.stem}{suffix}{input_path.suffix}"
+        else:
+            output_file = input_path.with_name(f"{input_path.stem}{suffix}{input_path.suffix}")
+        
+        print(f"Resizing: {input_file} -> {output_file}")
+        
+        try:
+            resize_video(str(input_file), str(output_file), 
+                        percentage=scale, width=width, height=height)
+            success_count += 1
+            print(f"  ✓ Success")
+        except Exception as e:
+            print(f"  ✗ Failed: {e}")
+    
+    print(f"\nBatch resize complete: {success_count}/{len(files)} successful")
+
+def batch_cut_handler(args):
+    """Handle batch cut operations."""
+    import glob
+    from pathlib import Path
+    
+    pattern = args.pattern
+    start_time = args.start
+    end_time = args.end
+    duration = args.duration
+    output_dir = args.output_dir
+    suffix = args.suffix
+    
+    files = glob.glob(pattern)
+    if not files:
+        print(f"No files found matching pattern: {pattern}")
+        return
+    
+    print(f"Found {len(files)} files to cut")
+    success_count = 0
+    
+    for input_file in files:
+        input_path = Path(input_file)
+        
+        # Determine output path
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            output_file = Path(output_dir) / f"{input_path.stem}{suffix}{input_path.suffix}"
+        else:
+            output_file = input_path.with_name(f"{input_path.stem}{suffix}{input_path.suffix}")
+        
+        print(f"Cutting: {input_file} -> {output_file}")
+        
+        try:
+            cut_video(str(input_file), str(output_file),
+                     start_time=start_time, end_time=end_time, duration=duration)
+            success_count += 1
+            print(f"  ✓ Success")
+        except Exception as e:
+            print(f"  ✗ Failed: {e}")
+    
+    print(f"\nBatch cut complete: {success_count}/{len(files)} successful")
+
+def batch_extract_audio_handler(args):
+    """Handle batch extract audio operations."""
+    import glob
+    from pathlib import Path
+    
+    pattern = args.pattern
+    audio_format = args.format
+    output_dir = args.output_dir
+    
+    files = glob.glob(pattern)
+    if not files:
+        print(f"No files found matching pattern: {pattern}")
+        return
+    
+    print(f"Found {len(files)} files to extract audio from")
+    success_count = 0
+    
+    for input_file in files:
+        input_path = Path(input_file)
+        
+        # Determine output path
+        ext = audio_format if audio_format.startswith('.') else f'.{audio_format}'
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            output_file = Path(output_dir) / f"{input_path.stem}{ext}"
+        else:
+            output_file = input_path.with_suffix(ext)
+        
+        print(f"Extracting: {input_file} -> {output_file}")
+        
+        try:
+            extract_audio(str(input_file), str(output_file), audio_format)
+            success_count += 1
+            print(f"  ✓ Success")
+        except Exception as e:
+            print(f"  ✗ Failed: {e}")
+    
+    print(f"\nBatch audio extraction complete: {success_count}/{len(files)} successful")
+
 # ─────────────────────────── CLI entry-point ─────────────────────────────────
 # Entry point moved to cli.py for package structure
