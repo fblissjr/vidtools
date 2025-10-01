@@ -3,10 +3,10 @@ vidtools - A comprehensive FFmpeg wrapper for common video processing tasks.
 """
 
 from ._version import __version__, __version_info__
-
 __author__ = "Fred Bliss"
 
-from .main import (
+# Import core functions from the new operations module
+from .operations import (
     cut_video,
     resize_video,
     convert_format,
@@ -19,8 +19,10 @@ from .main import (
     get_video_info,
     sanitize_video,
     apply_preset,
+    create_slideshow,
 )
 
+# Import preset management functions
 from .presets import (
     get_presets,
     save_preset_command,
@@ -29,12 +31,11 @@ from .presets import (
     list_presets,
 )
 
+# Define what is available for public import
 __all__ = [
-    # Version
     "__version__",
-    # Core functions
     "cut_video",
-    "resize_video", 
+    "resize_video",
     "convert_format",
     "extract_audio",
     "extract_frames",
@@ -45,7 +46,7 @@ __all__ = [
     "get_video_info",
     "sanitize_video",
     "apply_preset",
-    # Preset functions
+    "create_slideshow",
     "get_presets",
     "save_preset_command",
     "delete_preset",

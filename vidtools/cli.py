@@ -422,18 +422,18 @@ Note: For stream copy mode, all inputs must have the same codec parameters."""
 Examples:
   # Convert all webp files to mp4
   %(prog)s convert "*.webp" --format mp4
-  
+
   # Resize all videos in a folder to 50%%
   %(prog)s resize "videos/*.mp4" --scale 0.5
-  
+
   # Extract audio from all videos
   %(prog)s extract-audio "*.mp4" --format mp3
-  
+
   # Cut same segment from multiple videos
   %(prog)s cut "*.mp4" --start 10 --duration 30"""
     )
     batch_sub = batch.add_subparsers(dest="batch_operation", help="Operation to perform")
-    
+
     # Batch convert
     batch_convert = batch_sub.add_parser("convert", help="Batch convert files")
     batch_convert.add_argument("pattern", help="File pattern (e.g., '*.webp')")
@@ -442,7 +442,7 @@ Examples:
     batch_convert.add_argument("--suffix", help="Add suffix to output filename (e.g., '_converted')")
     batch_convert.add_argument("--overwrite", action="store_true", help="Overwrite existing files")
     batch_convert.set_defaults(func=main_module.batch_convert_handler)
-    
+
     # Batch resize
     batch_resize = batch_sub.add_parser("resize", help="Batch resize videos")
     batch_resize.add_argument("pattern", help="File pattern")
@@ -452,7 +452,7 @@ Examples:
     batch_resize.add_argument("-o", "--output-dir", help="Output directory")
     batch_resize.add_argument("--suffix", default="_resized", help="Add suffix to filename")
     batch_resize.set_defaults(func=main_module.batch_resize_handler)
-    
+
     # Batch cut
     batch_cut = batch_sub.add_parser("cut", help="Batch cut videos")
     batch_cut.add_argument("pattern", help="File pattern")
@@ -462,7 +462,7 @@ Examples:
     batch_cut.add_argument("-o", "--output-dir", help="Output directory")
     batch_cut.add_argument("--suffix", default="_cut", help="Add suffix to filename")
     batch_cut.set_defaults(func=main_module.batch_cut_handler)
-    
+
     # Batch extract audio
     batch_audio = batch_sub.add_parser("extract-audio", help="Batch extract audio")
     batch_audio.add_argument("pattern", help="File pattern")
@@ -503,8 +503,69 @@ Examples:
     edit.add_argument("name", help="Preset name")
     edit.set_defaults(func=main_module.edit_preset_handler)
 
-    return parser
+    # ---------------------------------------------------------------- slideshow
+    slideshow = subparsers.add_parser(
+        "slideshow",
+        help="Create a slideshow video from a sequence of images.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description="""Create a slideshow from a batch of images with smart resizing.
 
+Examples:
+  # Create a 1080p slideshow, padding smaller images with black bars
+  %(prog)s "images/*.png" out.mp4 --size 1920x1080 --resize-mode pad
+
+  # Create a 720p slideshow, cropping images to fit the frame
+  %(prog)s "images/*.jpg" out.mp4 --size 1280x720 --resize-mode crop
+
+  # Sanitize by adding noise, then create a padded slideshow with a blue background
+  %(prog)s "raw/*.png" final.mp4 --size 1024x1024 --resize-mode pad --pad-color "0,0,255" --sanitize-noise 5
+"""
+    )
+    slideshow.add_argument("pattern", help="Input image pattern (e.g., 'images/*.png')")
+    slideshow.add_argument("output", help="Output video file")
+    slideshow.add_argument(
+        "-d", "--duration", type=float, default=3,
+        help="Duration for each image in seconds (default: 3)"
+    )
+    slideshow.add_argument(
+        "--fps", type=int, default=24, help="Frames per second for the video (default: 24)"
+    )
+    slideshow.add_argument(
+        "--size", help="Output size 'WxH' (e.g., '1920x1080'). Defaults to first image size."
+    )
+    slideshow.add_argument(
+        "--resize-mode", choices=["stretch", "pad", "crop"], default="stretch",
+        help="How to handle images with different aspect ratios (default: stretch)."
+    )
+    slideshow.add_argument(
+        "--pad-color", default="0,0,0",
+        help="RGB color for padding when using 'pad' mode (e.g., '255,255,255' for white)."
+    )
+    slideshow.add_argument(
+        "--crop-position", choices=["center", "top", "bottom", "left", "right"], default="center",
+        help="Position of the crop when using 'crop' mode (default: center)."
+    )
+    slideshow.add_argument("--audio", type=lambda x: is_valid_file(slideshow, x),
+                           help="Path to an audio file to add as a soundtrack.")
+    slideshow.add_argument("--sanitize-crop",
+                           help="Sanitize by cropping EACH image before resizing. Format: 'W:H:X:Y'")
+    slideshow.add_argument("--sanitize-noise", type=int,
+                           help="Sanitize by adding noise to EACH image before resizing. Value 0-100.")
+    slideshow.set_defaults(func=main_module.slideshow_handler)
+    srt_parser = subparsers.add_parser(
+        "srt-from-transcript",
+        help="Convert a timed transcript to a .srt subtitle file",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description="Converts a transcript file with simple second-based timestamps"
+    )
+    srt_parser.add_argument("input", type=lambda x: is_valid_file(srt_parser, x),
+                            help="Input transcript text file")
+    srt_parser.add_argument("output", help="Output .srt subtitle file")
+    srt_parser.set_defaults(func=main_module.create_srt_from_transcript_handler)
+    # ==========================================================================
+
+    # The return statement should be the VERY LAST thing in the function
+    return parser
 
 # singleton parser -----------------------------------------------------------
 _parser: argparse.ArgumentParser | None = None
