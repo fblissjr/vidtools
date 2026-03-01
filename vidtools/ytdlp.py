@@ -5,6 +5,7 @@ Downloads video/audio from YouTube via subprocess with progress parsing.
 
 import re
 import subprocess
+from pathlib import Path
 from typing import Callable
 
 import structlog
@@ -56,7 +57,12 @@ def build_ytdlp_command(
         format_type: One of 'mp3', 'wav', 'mp4'.
         max_duration: Max video duration in seconds. None to disable.
     """
-    cmd = ["yt-dlp", "--no-playlist", "--newline"]
+    cmd = [
+        "yt-dlp",
+        "--no-playlist",
+        "--newline",
+        "--print", "after_move:filepath",
+    ]
 
     if format_type in ("mp3", "wav"):
         cmd.extend([
@@ -117,6 +123,7 @@ def download(
     )
 
     actual_output = output_path
+    printed_filepath = None
 
     while True:
         line = process.stdout.readline()
@@ -126,10 +133,12 @@ def download(
             line = line.strip()
             logger.debug("yt-dlp output", line=line)
 
-            # Track actual output filename
-            if "[download] Destination:" in line:
-                dest = line.split("Destination:", 1)[1].strip()
-                actual_output = dest
+            # --print after_move:filepath outputs the final path as a bare line
+            # after download completes. It won't start with '['.
+            if line and not line.startswith("[") and not line.startswith("WARNING"):
+                candidate = Path(line)
+                if candidate.exists() and candidate.is_file():
+                    printed_filepath = str(candidate)
 
             progress = parse_ytdlp_progress(line)
             if progress and progress_callback:
@@ -141,6 +150,18 @@ def download(
 
     if process.returncode != 0:
         raise RuntimeError(f"yt-dlp failed with exit code {process.returncode}")
+
+    # Use the --print filepath if available, otherwise fall back
+    if printed_filepath:
+        actual_output = printed_filepath
+    elif not Path(actual_output).exists():
+        # Last resort: scan directory for our file
+        stem = Path(output_path).stem
+        parent = Path(output_path).parent
+        for candidate in parent.iterdir():
+            if candidate.is_file() and candidate.stem.startswith(stem.split(".")[0]):
+                actual_output = str(candidate)
+                break
 
     if progress_callback:
         progress_callback(100, "Download complete")

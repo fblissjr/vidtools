@@ -88,6 +88,17 @@ class TestBuildYtdlpCommand:
         )
         assert "--no-playlist" in cmd
 
+    def test_print_filepath_flag(self):
+        """Verify --print after_move:filepath is included for reliable output detection."""
+        cmd = build_ytdlp_command(
+            url="https://www.youtube.com/watch?v=test123",
+            output_path="/tmp/out.mp3",
+            format_type="mp3",
+        )
+        assert "--print" in cmd
+        idx = cmd.index("--print")
+        assert cmd[idx + 1] == "after_move:filepath"
+
     def test_max_duration(self):
         cmd = build_ytdlp_command(
             url="https://www.youtube.com/watch?v=test123",

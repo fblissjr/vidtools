@@ -34,7 +34,9 @@ def crop_video_handler(args):
     operations.crop_video(args.input, args.output, args.width, args.height, args.x, args.y)
 
 def get_video_info_handler(args):
-    operations.get_video_info(args.input)
+    import json
+    info = operations.get_video_info(args.input)
+    print(json.dumps(info, indent=4))
 
 def add_subtitles_handler(args):
     operations.add_subtitles(args.input, args.output, args.subs)
@@ -84,7 +86,7 @@ def save_preset_handler(args):
     print("Please edit the 'presets/ffmpeg_presets.json' file manually for now.")
 
 def merge_videos_handler(args):
-    print("❌ The 'merge' command has not been implemented in this build.")
+    print("The 'merge' command has not been implemented in this build.")
 
 # --- Batch Handlers (Corrected Syntax) ---
 
