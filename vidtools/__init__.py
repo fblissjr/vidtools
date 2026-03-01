@@ -1,11 +1,11 @@
 """
-vidtools - A comprehensive FFmpeg wrapper for common video processing tasks.
+vidtools - FFmpeg + yt-dlp video processing tool with web UI and CLI.
 """
 
 from ._version import __version__, __version_info__
 __author__ = "Fred Bliss"
 
-# Import core functions from the new operations module
+# Import core functions from the operations module
 from .operations import (
     cut_video,
     resize_video,

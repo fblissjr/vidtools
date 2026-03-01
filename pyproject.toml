@@ -4,17 +4,24 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vidtools"
-version = "0.1.0"
-description = "A comprehensive FFmpeg wrapper for common video processing tasks"
+version = "0.2.0"
+description = "FFmpeg + yt-dlp video processing tool with web UI and CLI"
 readme = "README.md"
 license = {file = "LICENSE"}
 
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 dependencies = [
     "tqdm>=4.65.0",
     "structlog>=23.1.0",
     "Pillow>=9.0.0",
     "numpy>=1.21.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
+    "python-jose[cryptography]>=3.3.0",
+    "bcrypt>=4.0.0",
+    "yt-dlp>=2024.0.0",
+    "orjson>=3.9.0",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -23,15 +30,12 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Video",
     "Topic :: Multimedia :: Video :: Conversion",
 ]
-keywords = ["ffmpeg", "video", "conversion", "editing", "multimedia"]
+keywords = ["ffmpeg", "video", "conversion", "editing", "multimedia", "yt-dlp"]
 
 [project.optional-dependencies]
 tui = ["textual>=0.40.0"]
@@ -44,7 +48,7 @@ dev = [
 
 [project.scripts]
 vidtools = "vidtools.cli:main"
-vt = "vidtools.cli:main"  # Short alias
+vt = "vidtools.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/fredbliss/vidtools"
@@ -55,9 +59,12 @@ Issues = "https://github.com/fredbliss/vidtools/issues"
 where = ["."]
 include = ["vidtools*"]
 
+[tool.setuptools.package-data]
+"vidtools" = ["web/**"]
+
 [tool.ruff]
 line-length = 100
-target-version = "py38"
+target-version = "py312"
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
@@ -74,10 +81,18 @@ ignore = [
 
 [tool.black]
 line-length = 100
-target-version = ["py38"]
+target-version = ["py312"]
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

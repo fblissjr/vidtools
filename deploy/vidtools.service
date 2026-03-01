@@ -1,0 +1,22 @@
+[Unit]
+Description=Vidtools Web Server
+After=network.target
+
+[Service]
+Type=exec
+User=vidtools
+Group=vidtools
+WorkingDirectory=/opt/vidtools
+ExecStart=/opt/vidtools/.venv/bin/uvicorn vidtools.server:app --host 0.0.0.0 --port 8910
+Restart=always
+RestartSec=5
+Environment=VIDTOOLS_DATA_DIR=/opt/vidtools/data
+Environment=VIDTOOLS_CONFIG_DIR=/opt/vidtools/config
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vidtools/data /opt/vidtools/config
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
