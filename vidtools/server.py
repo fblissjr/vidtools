@@ -355,7 +355,7 @@ async def upload_file(request: Request):
 
     form = await request.form()
     uploaded = form.get("file")
-    if uploaded is None or not isinstance(uploaded, UploadFile):
+    if uploaded is None or not hasattr(uploaded, "read"):
         raise HTTPException(status_code=400, detail="No file provided")
 
     safe_name = sanitize_filename(uploaded.filename or "upload")
