@@ -327,23 +327,19 @@ def add_audio(input_file: str, audio_file: str, output_file: str,
     command = ["ffmpeg", "-y", "-i", input_file, "-i", audio_file]
 
     if mode == "replace":
-        command.extend(["-map", "0:v", "-map", "1:a"])
-        command.extend(["-c:v", "copy"])
+        command.extend(["-map", "0:v", "-map", "1:a", "-c:v", "copy"])
         if volume != 1.0:
-            command.extend(["-af", f"volume={volume}"])
-            command.extend(["-c:a", "aac"])
+            command.extend(["-af", f"volume={volume}", "-c:a", "aac"])
         else:
-            command.extend(["-c:a", "aac"])
+            command.extend(["-c:a", "copy"])
+        command.append("-shortest")
     else:
-        # mix mode: layer new audio on top of existing
+        # mix mode: amix handles duration via duration=shortest
         if volume != 1.0:
             filter_expr = f"[1:a]volume={volume}[adj];[0:a][adj]amix=inputs=2:duration=shortest"
         else:
             filter_expr = "[0:a][1:a]amix=inputs=2:duration=shortest"
-        command.extend(["-filter_complex", filter_expr])
-        command.extend(["-map", "0:v", "-c:v", "copy"])
-
-    command.append("-shortest")
+        command.extend(["-filter_complex", filter_expr, "-map", "0:v", "-c:v", "copy"])
     if output_file.lower().endswith('.mp4'):
         command.extend(["-movflags", "+faststart"])
     command.append(output_file)

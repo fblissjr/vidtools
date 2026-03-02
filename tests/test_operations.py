@@ -83,104 +83,83 @@ class TestAddAudioValidation:
 class TestAddAudioCommand:
     """Test ffmpeg command construction for add_audio (mocked)."""
 
-    def test_replace_mode_command(self, monkeypatch):
-        """Replace mode should map video stream from input 0 and audio from input 1."""
-        captured_cmd = []
-
+    @pytest.fixture()
+    def capture_ffmpeg(self, monkeypatch):
+        captured = []
         def mock_run(cmd, progress_callback=None):
-            captured_cmd.extend(cmd)
-
+            captured.extend(cmd)
         monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
+        return captured
+
+    def test_replace_mode_command(self, capture_ffmpeg):
+        """Replace mode should map video stream from input 0 and audio from input 1."""
         add_audio("video.mp4", "audio.mp3", "output.mp4", mode="replace")
 
-        assert "-i" in captured_cmd
-        assert "video.mp4" in captured_cmd
-        assert "audio.mp3" in captured_cmd
-        # Should map video from first input and audio from second input
-        assert "-map" in captured_cmd
-        assert "0:v" in captured_cmd
-        assert "1:a" in captured_cmd
+        assert "-i" in capture_ffmpeg
+        assert "video.mp4" in capture_ffmpeg
+        assert "audio.mp3" in capture_ffmpeg
+        assert "-map" in capture_ffmpeg
+        assert "0:v" in capture_ffmpeg
+        assert "1:a" in capture_ffmpeg
 
-    def test_mix_mode_command(self, monkeypatch):
+    def test_mix_mode_command(self, capture_ffmpeg):
         """Mix mode should use amix filter_complex."""
-        captured_cmd = []
-
-        def mock_run(cmd, progress_callback=None):
-            captured_cmd.extend(cmd)
-
-        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
         add_audio("video.mp4", "audio.mp3", "output.mp4", mode="mix")
 
-        assert "-filter_complex" in captured_cmd
-        # Should contain amix filter
-        filter_idx = captured_cmd.index("-filter_complex") + 1
-        assert "amix" in captured_cmd[filter_idx]
+        assert "-filter_complex" in capture_ffmpeg
+        filter_idx = capture_ffmpeg.index("-filter_complex") + 1
+        assert "amix" in capture_ffmpeg[filter_idx]
 
-    def test_replace_copies_video_stream(self, monkeypatch):
+    def test_replace_copies_video_stream(self, capture_ffmpeg):
         """Replace mode should copy video stream (no re-encode)."""
-        captured_cmd = []
-
-        def mock_run(cmd, progress_callback=None):
-            captured_cmd.extend(cmd)
-
-        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
         add_audio("video.mp4", "audio.mp3", "output.mp4", mode="replace")
 
-        assert "-c:v" in captured_cmd
-        cv_idx = captured_cmd.index("-c:v") + 1
-        assert captured_cmd[cv_idx] == "copy"
+        assert "-c:v" in capture_ffmpeg
+        cv_idx = capture_ffmpeg.index("-c:v") + 1
+        assert capture_ffmpeg[cv_idx] == "copy"
 
-    def test_volume_applied_in_mix_mode(self, monkeypatch):
+    def test_replace_copies_audio_at_default_volume(self, capture_ffmpeg):
+        """Replace with default volume should stream-copy audio (no re-encode)."""
+        add_audio("video.mp4", "audio.mp3", "output.mp4", mode="replace")
+
+        ca_idx = capture_ffmpeg.index("-c:a") + 1
+        assert capture_ffmpeg[ca_idx] == "copy"
+        assert "-af" not in capture_ffmpeg
+
+    def test_volume_applied_in_mix_mode(self, capture_ffmpeg):
         """Volume adjustment should appear in filter_complex when mixing."""
-        captured_cmd = []
-
-        def mock_run(cmd, progress_callback=None):
-            captured_cmd.extend(cmd)
-
-        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
         add_audio("video.mp4", "audio.mp3", "output.mp4", mode="mix", volume=0.5)
 
-        filter_idx = captured_cmd.index("-filter_complex") + 1
-        assert "volume=0.5" in captured_cmd[filter_idx]
+        filter_idx = capture_ffmpeg.index("-filter_complex") + 1
+        assert "volume=0.5" in capture_ffmpeg[filter_idx]
 
-    def test_volume_applied_in_replace_mode(self, monkeypatch):
-        """Volume adjustment should use audio filter in replace mode too."""
-        captured_cmd = []
-
-        def mock_run(cmd, progress_callback=None):
-            captured_cmd.extend(cmd)
-
-        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
+    def test_volume_applied_in_replace_mode(self, capture_ffmpeg):
+        """Volume adjustment should re-encode audio with aac in replace mode."""
         add_audio("video.mp4", "audio.mp3", "output.mp4", mode="replace", volume=0.5)
 
-        # When volume != 1.0, should use filter for the audio
-        cmd_str = " ".join(captured_cmd)
+        cmd_str = " ".join(capture_ffmpeg)
         assert "volume=0.5" in cmd_str
+        ca_idx = capture_ffmpeg.index("-c:a") + 1
+        assert capture_ffmpeg[ca_idx] == "aac"
 
-    def test_mp4_output_gets_faststart(self, monkeypatch):
+    def test_mp4_output_gets_faststart(self, capture_ffmpeg):
         """MP4 output should include -movflags +faststart."""
-        captured_cmd = []
-
-        def mock_run(cmd, progress_callback=None):
-            captured_cmd.extend(cmd)
-
-        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
         add_audio("video.mp4", "audio.mp3", "output.mp4", mode="replace")
 
-        assert "-movflags" in captured_cmd
-        assert "+faststart" in captured_cmd
+        assert "-movflags" in capture_ffmpeg
+        assert "+faststart" in capture_ffmpeg
 
-    def test_shortest_flag_present(self, monkeypatch):
-        """Output should use -shortest to match the shorter of video/audio."""
-        captured_cmd = []
-
-        def mock_run(cmd, progress_callback=None):
-            captured_cmd.extend(cmd)
-
-        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
+    def test_shortest_flag_in_replace_mode(self, capture_ffmpeg):
+        """Replace mode should use -shortest."""
         add_audio("video.mp4", "audio.mp3", "output.mp4", mode="replace")
 
-        assert "-shortest" in captured_cmd
+        assert "-shortest" in capture_ffmpeg
+
+    def test_mix_mode_no_shortest_flag(self, capture_ffmpeg):
+        """Mix mode uses amix duration=shortest, no need for -shortest flag."""
+        add_audio("video.mp4", "audio.mp3", "output.mp4", mode="mix")
+
+        assert "-shortest" not in capture_ffmpeg
 
 
 class TestProgressCallbackSignature:

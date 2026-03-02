@@ -288,19 +288,23 @@
   }
 
   // --- Audio file selector for add-audio operation ---
+  function populateAudioSelect(files) {
+    const select = $("#audio-file-select");
+    while (select.children.length > 1) {
+      select.removeChild(select.lastChild);
+    }
+    files.forEach(f => {
+      const opt = document.createElement("option");
+      opt.value = f.id;
+      opt.textContent = f.filename + " (" + formatSize(f.size) + ")";
+      select.appendChild(opt);
+    });
+  }
+
   async function loadAudioFileOptions() {
     try {
       const data = await api("/api/files");
-      const select = $("#audio-file-select");
-      while (select.children.length > 1) {
-        select.removeChild(select.lastChild);
-      }
-      (data.files || []).forEach(f => {
-        const opt = document.createElement("option");
-        opt.value = f.id;
-        opt.textContent = f.filename + " (" + formatSize(f.size) + ")";
-        select.appendChild(opt);
-      });
+      populateAudioSelect(data.files || []);
     } catch (e) {
       // silently fail
     }
@@ -310,7 +314,11 @@
   async function loadFiles() {
     try {
       const data = await api("/api/files");
-      renderFiles(data.files || []);
+      const files = data.files || [];
+      renderFiles(files);
+      if ($("#operation-select").value === "add-audio") {
+        populateAudioSelect(files);
+      }
     } catch (e) {
       // silently fail
     }

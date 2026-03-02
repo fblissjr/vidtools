@@ -20,10 +20,10 @@ from fastapi import (
     HTTPException,
     Request,
     Response,
-    UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
+from starlette.datastructures import UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -355,7 +355,7 @@ async def upload_file(request: Request):
 
     form = await request.form()
     uploaded = form.get("file")
-    if uploaded is None or not hasattr(uploaded, "read"):
+    if uploaded is None or not isinstance(uploaded, UploadFile):
         raise HTTPException(status_code=400, detail="No file provided")
 
     safe_name = sanitize_filename(uploaded.filename or "upload")
