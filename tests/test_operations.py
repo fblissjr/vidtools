@@ -9,6 +9,7 @@ from vidtools.operations import (
     rotate_video,
     apply_preset,
     get_video_info,
+    add_audio,
 )
 
 
@@ -41,6 +42,145 @@ class TestGetVideoInfo:
         with pytest.raises(Exception):
             # Should raise because file doesn't exist, not return None
             get_video_info(str(tmp_path / "nonexistent.mp4"))
+
+
+class TestAddAudioValidation:
+    def test_raises_on_invalid_mode(self):
+        """add_audio must raise ValueError for unknown mode."""
+        with pytest.raises(ValueError, match="Invalid mode"):
+            add_audio("video.mp4", "audio.mp3", "output.mp4", mode="invalid")
+
+    def test_raises_on_invalid_volume(self):
+        """add_audio must raise ValueError for volume out of range."""
+        with pytest.raises(ValueError, match="volume"):
+            add_audio("video.mp4", "audio.mp3", "output.mp4", volume=-0.5)
+
+    def test_accepts_replace_mode(self):
+        """add_audio should accept 'replace' mode without validation error."""
+        # Will fail on actual ffmpeg execution (no real files), but should not
+        # raise ValueError for mode validation
+        import inspect
+        sig = inspect.signature(add_audio)
+        assert "mode" in sig.parameters
+
+    def test_accepts_mix_mode(self):
+        """add_audio should accept 'mix' mode parameter."""
+        import inspect
+        sig = inspect.signature(add_audio)
+        params = sig.parameters
+        assert "mode" in params
+        assert params["mode"].default == "replace"
+
+    def test_accepts_volume_param(self):
+        """add_audio should accept volume parameter."""
+        import inspect
+        sig = inspect.signature(add_audio)
+        params = sig.parameters
+        assert "volume" in params
+        assert params["volume"].default == 1.0
+
+
+class TestAddAudioCommand:
+    """Test ffmpeg command construction for add_audio (mocked)."""
+
+    def test_replace_mode_command(self, monkeypatch):
+        """Replace mode should map video stream from input 0 and audio from input 1."""
+        captured_cmd = []
+
+        def mock_run(cmd, progress_callback=None):
+            captured_cmd.extend(cmd)
+
+        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
+        add_audio("video.mp4", "audio.mp3", "output.mp4", mode="replace")
+
+        assert "-i" in captured_cmd
+        assert "video.mp4" in captured_cmd
+        assert "audio.mp3" in captured_cmd
+        # Should map video from first input and audio from second input
+        assert "-map" in captured_cmd
+        assert "0:v" in captured_cmd
+        assert "1:a" in captured_cmd
+
+    def test_mix_mode_command(self, monkeypatch):
+        """Mix mode should use amix filter_complex."""
+        captured_cmd = []
+
+        def mock_run(cmd, progress_callback=None):
+            captured_cmd.extend(cmd)
+
+        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
+        add_audio("video.mp4", "audio.mp3", "output.mp4", mode="mix")
+
+        assert "-filter_complex" in captured_cmd
+        # Should contain amix filter
+        filter_idx = captured_cmd.index("-filter_complex") + 1
+        assert "amix" in captured_cmd[filter_idx]
+
+    def test_replace_copies_video_stream(self, monkeypatch):
+        """Replace mode should copy video stream (no re-encode)."""
+        captured_cmd = []
+
+        def mock_run(cmd, progress_callback=None):
+            captured_cmd.extend(cmd)
+
+        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
+        add_audio("video.mp4", "audio.mp3", "output.mp4", mode="replace")
+
+        assert "-c:v" in captured_cmd
+        cv_idx = captured_cmd.index("-c:v") + 1
+        assert captured_cmd[cv_idx] == "copy"
+
+    def test_volume_applied_in_mix_mode(self, monkeypatch):
+        """Volume adjustment should appear in filter_complex when mixing."""
+        captured_cmd = []
+
+        def mock_run(cmd, progress_callback=None):
+            captured_cmd.extend(cmd)
+
+        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
+        add_audio("video.mp4", "audio.mp3", "output.mp4", mode="mix", volume=0.5)
+
+        filter_idx = captured_cmd.index("-filter_complex") + 1
+        assert "volume=0.5" in captured_cmd[filter_idx]
+
+    def test_volume_applied_in_replace_mode(self, monkeypatch):
+        """Volume adjustment should use audio filter in replace mode too."""
+        captured_cmd = []
+
+        def mock_run(cmd, progress_callback=None):
+            captured_cmd.extend(cmd)
+
+        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
+        add_audio("video.mp4", "audio.mp3", "output.mp4", mode="replace", volume=0.5)
+
+        # When volume != 1.0, should use filter for the audio
+        cmd_str = " ".join(captured_cmd)
+        assert "volume=0.5" in cmd_str
+
+    def test_mp4_output_gets_faststart(self, monkeypatch):
+        """MP4 output should include -movflags +faststart."""
+        captured_cmd = []
+
+        def mock_run(cmd, progress_callback=None):
+            captured_cmd.extend(cmd)
+
+        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
+        add_audio("video.mp4", "audio.mp3", "output.mp4", mode="replace")
+
+        assert "-movflags" in captured_cmd
+        assert "+faststart" in captured_cmd
+
+    def test_shortest_flag_present(self, monkeypatch):
+        """Output should use -shortest to match the shorter of video/audio."""
+        captured_cmd = []
+
+        def mock_run(cmd, progress_callback=None):
+            captured_cmd.extend(cmd)
+
+        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
+        add_audio("video.mp4", "audio.mp3", "output.mp4", mode="replace")
+
+        assert "-shortest" in captured_cmd
 
 
 class TestProgressCallbackSignature:
@@ -102,4 +242,9 @@ class TestProgressCallbackSignature:
     def test_apply_preset_accepts_callback(self):
         import inspect
         sig = inspect.signature(apply_preset)
+        assert "progress_callback" in sig.parameters
+
+    def test_add_audio_accepts_callback(self):
+        import inspect
+        sig = inspect.signature(add_audio)
         assert "progress_callback" in sig.parameters

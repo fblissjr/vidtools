@@ -305,6 +305,51 @@ def create_slideshow(image_pattern: str, output_file: str, duration_per_image: f
         run_ffmpeg_command(command, progress_callback=progress_callback)
 
 
+def add_audio(input_file: str, audio_file: str, output_file: str,
+              mode: str = "replace", volume: float = 1.0,
+              progress_callback: Callable | None = None):
+    """Add an audio track to a video file.
+
+    Args:
+        input_file: Path to the video file.
+        audio_file: Path to the audio file to add.
+        output_file: Path for the output file.
+        mode: "replace" to replace existing audio (default),
+              "mix" to layer new audio on top of existing.
+        volume: Volume multiplier for the added audio (0.0 to 10.0, default 1.0).
+        progress_callback: Optional callback for progress reporting.
+    """
+    if mode not in ("replace", "mix"):
+        raise ValueError(f"Invalid mode: '{mode}'. Use 'replace' or 'mix'.")
+    if volume < 0.0 or volume > 10.0:
+        raise ValueError(f"volume must be between 0.0 and 10.0, got {volume}")
+
+    command = ["ffmpeg", "-y", "-i", input_file, "-i", audio_file]
+
+    if mode == "replace":
+        command.extend(["-map", "0:v", "-map", "1:a"])
+        command.extend(["-c:v", "copy"])
+        if volume != 1.0:
+            command.extend(["-af", f"volume={volume}"])
+            command.extend(["-c:a", "aac"])
+        else:
+            command.extend(["-c:a", "aac"])
+    else:
+        # mix mode: layer new audio on top of existing
+        if volume != 1.0:
+            filter_expr = f"[1:a]volume={volume}[adj];[0:a][adj]amix=inputs=2:duration=shortest"
+        else:
+            filter_expr = "[0:a][1:a]amix=inputs=2:duration=shortest"
+        command.extend(["-filter_complex", filter_expr])
+        command.extend(["-map", "0:v", "-c:v", "copy"])
+
+    command.append("-shortest")
+    if output_file.lower().endswith('.mp4'):
+        command.extend(["-movflags", "+faststart"])
+    command.append(output_file)
+    run_ffmpeg_command(command, progress_callback=progress_callback)
+
+
 def create_srt_from_transcript(input_file: str, output_file: str):
     """
     Converts a text file with [start --> end] timestamps into a .srt subtitle file.

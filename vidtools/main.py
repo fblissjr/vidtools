@@ -102,5 +102,10 @@ def batch_cut_handler(args):
 def batch_extract_audio_handler(args):
     print("Batch extract audio not implemented yet.")
 
+def add_audio_handler(args):
+    mode = "mix" if args.mix else "replace"
+    operations.add_audio(args.input, args.audio, args.output,
+                         mode=mode, volume=args.volume)
+
 def create_srt_from_transcript_handler(args):
     operations.create_srt_from_transcript(args.input, args.output)

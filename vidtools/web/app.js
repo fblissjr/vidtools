@@ -215,6 +215,9 @@
       const params = $(`#params-${op}`);
       if (params) params.hidden = false;
     }
+    if (op === "add-audio") {
+      loadAudioFileOptions();
+    }
     updateProcessBtn();
   }
 
@@ -271,10 +274,35 @@
         };
       case "rotate":
         return { rotation: parseInt($("#rotate-deg").value) };
+      case "add-audio":
+        return {
+          audio_file_id: $("#audio-file-select").value,
+          mode: $("#audio-mix").checked ? "mix" : "replace",
+          volume: parseFloat($("#audio-volume").value) || 1.0
+        };
       case "preset":
         return { preset_name: $("#preset-select").value };
       default:
         return {};
+    }
+  }
+
+  // --- Audio file selector for add-audio operation ---
+  async function loadAudioFileOptions() {
+    try {
+      const data = await api("/api/files");
+      const select = $("#audio-file-select");
+      while (select.children.length > 1) {
+        select.removeChild(select.lastChild);
+      }
+      (data.files || []).forEach(f => {
+        const opt = document.createElement("option");
+        opt.value = f.id;
+        opt.textContent = f.filename + " (" + formatSize(f.size) + ")";
+        select.appendChild(opt);
+      });
+    } catch (e) {
+      // silently fail
     }
   }
 

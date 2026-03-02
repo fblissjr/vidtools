@@ -511,6 +511,17 @@ def _run_ffmpeg_job(job: Job, progress_callback):
             use_copy=params.get("copy", True),
             progress_callback=progress_callback,
         )
+    elif op == "add-audio":
+        audio_info = file_registry.get(params.get("audio_file_id", ""))
+        if audio_info is None:
+            raise RuntimeError("Audio file not found")
+        audio_path = audio_info["path"]
+        operations.add_audio(
+            input_path, audio_path, output_path,
+            mode=params.get("mode", "replace"),
+            volume=params.get("volume", 1.0),
+            progress_callback=progress_callback,
+        )
     elif op == "preset":
         operations.apply_preset(
             input_path, output_path,

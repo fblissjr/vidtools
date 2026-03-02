@@ -89,6 +89,7 @@
               <option value="extract-audio">Extract Audio</option>
               <option value="crop">Crop</option>
               <option value="rotate">Rotate</option>
+              <option value="add-audio">Add Audio</option>
               <option value="preset">Apply Preset</option>
             </select>
           </div>
@@ -174,6 +175,24 @@
                 <option value="180">180 degrees</option>
                 <option value="270">270 degrees</option>
               </select>
+            </div>
+          </div>
+
+          <div id="params-add-audio" class="op-params" hidden>
+            <div class="form-group">
+              <label>Audio file</label>
+              <select id="audio-file-select">
+                <option value="">-- Select uploaded audio --</option>
+              </select>
+              <span class="hint">Upload the audio file first via the file upload above</span>
+            </div>
+            <label class="checkbox-label">
+              <input type="checkbox" id="audio-mix"> Mix with existing audio (default: replace)
+            </label>
+            <div class="form-group">
+              <label>Volume</label>
+              <input type="number" id="audio-volume" placeholder="1.0" min="0" max="10" step="0.1" value="1.0">
+              <span class="hint">Multiplier for the added audio track</span>
             </div>
           </div>
 

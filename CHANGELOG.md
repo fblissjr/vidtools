@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+- `add-audio` operation: add audio tracks to video files (CLI, web API, and UI)
+- Replace mode (default): replaces existing audio with new track
+- Mix mode: layers new audio on top of existing audio using amix
+- Volume control for the added audio track (0.0-10.0)
+
 ## 0.2.0
 
 ### Added

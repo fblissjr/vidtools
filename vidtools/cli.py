@@ -552,6 +552,48 @@ Examples:
     slideshow.add_argument("--sanitize-noise", type=int,
                            help="Sanitize by adding noise to EACH image before resizing. Value 0-100.")
     slideshow.set_defaults(func=main_module.slideshow_handler)
+    # ---------------------------------------------------------------- add-audio
+    add_audio_parser = subparsers.add_parser(
+        "add-audio",
+        help="Add an audio track to a video (replace or mix)",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description="""Add an audio file to a video file.
+
+By default, replaces the existing audio track. Use --mix to layer
+the new audio on top of the existing track.
+
+Examples:
+  # Replace video audio with a music file
+  %(prog)s video.mp4 music.mp3 output.mp4
+
+  # Mix narration on top of existing audio
+  %(prog)s video.mp4 narration.wav output.mp4 --mix
+
+  # Replace audio with volume reduced to 50%%
+  %(prog)s video.mp4 music.mp3 output.mp4 --volume 0.5
+
+  # Mix with the new track at 30%% volume
+  %(prog)s video.mp4 bg_music.mp3 output.mp4 --mix --volume 0.3"""
+    )
+    add_audio_parser.add_argument(
+        "input", type=lambda x: is_valid_file(add_audio_parser, x),
+        help="Input video file"
+    )
+    add_audio_parser.add_argument(
+        "audio", type=lambda x: is_valid_file(add_audio_parser, x),
+        help="Audio file to add"
+    )
+    add_audio_parser.add_argument("output", help="Output video file")
+    add_audio_parser.add_argument(
+        "--mix", action="store_true",
+        help="Layer new audio on top of existing (default: replace)"
+    )
+    add_audio_parser.add_argument(
+        "--volume", "-v", type=float, default=1.0,
+        help="Volume multiplier for the added audio (0.0-10.0, default: 1.0)"
+    )
+    add_audio_parser.set_defaults(func=main_module.add_audio_handler)
+
     srt_parser = subparsers.add_parser(
         "srt-from-transcript",
         help="Convert a timed transcript to a .srt subtitle file",
