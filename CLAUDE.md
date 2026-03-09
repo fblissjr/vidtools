@@ -5,6 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Code and Writing Style Guidelines
 
 - Always use `uv`
+- Use `orjson` everywhere (not `json`). File I/O: `open(..., "rb")` / `open(..., "wb")` since orjson works with bytes.
+- `operations.py` uses `_add_faststart_if_mp4()` and `_add_time_range_args()` helpers -- use them instead of inline patterns.
+- No stub handlers or "not implemented" placeholders -- only add CLI commands when the operation exists in `operations.py`.
 
 ## FFmpeg Usage
 
@@ -37,7 +40,7 @@ Both interfaces share the same core operations in `operations.py`. The web serve
 
 - **jobs.py**: `Job` dataclass with status tracking and `JobManager` with `asyncio.Semaphore`-based concurrency limiting (default 2). Jobs are in-memory only (no database).
 
-- **ytdlp.py**: yt-dlp subprocess wrapper. Uses `--print after_move:filepath` for reliable output filename detection. Parses progress from stdout. Supports MP3, WAV, MP4 formats with optional max duration limit.
+- **ytdlp.py**: yt-dlp subprocess wrapper. Uses `--print after_move:filepath` for reliable output filename detection. Parses progress from stdout. Supports MP3, WAV, MP4 formats with optional max duration limit. Download URLs are validated as HTTPS-only in `security.py:validate_download_url()` (not YouTube-specific).
 
 - **presets.py**: Preset management system for saving and loading FFmpeg configurations. Stores presets in `presets/ffmpeg_presets.json`.
 
@@ -81,7 +84,7 @@ uv run uvicorn vidtools.server:app --host 0.0.0.0 --port 8910
 uv run pytest tests/ -v
 ```
 
-95 tests across 5 test files (security, jobs, operations, ytdlp, server).
+Tests across 5 files in `tests/` (security, jobs, operations, ytdlp, server). Run `uv run pytest tests/ -v` to see current count.
 
 ### Adding New Operations
 
