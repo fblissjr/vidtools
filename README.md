@@ -105,7 +105,7 @@ vidtools preset apply input.mp4 output.mp4 compress_web
 vidtools preset list
 ```
 
-Full list: cut, resize, convert, extract-audio, extract-frames, concat, crop, rotate, subtitles, sanitize, info, preset.
+Full list: cut, resize, convert, extract-audio, extract-frames, concat, crop, rotate, subtitles, sanitize, slideshow, add-audio, srt-from-transcript, info, preset.
 
 ## Deployment
 
@@ -123,7 +123,7 @@ This creates a systemd service with security hardening (NoNewPrivileges, Protect
 ```
 vidtools/
   __init__.py        # Package exports
-  _version.py        # Version (0.2.0)
+  _version.py        # Version
   cli.py             # Argparse CLI
   main.py            # CLI handler functions
   operations.py      # Core FFmpeg operations (all accept progress_callback)
@@ -140,10 +140,12 @@ vidtools/
 deploy/
   setup.sh           # Ubuntu deployment script
   vidtools.service   # systemd unit file
+data/               # Runtime data (uploads, output, temp) -- gitignored except .gitkeep
+internal/           # Internal logs -- gitignored except .gitkeep
 tests/
-  test_security.py   # 37 tests
-  test_jobs.py       # 14 tests
-  test_operations.py # 14 tests
-  test_ytdlp.py      # 16 tests
-  test_server.py     # 3 tests
+  test_security.py
+  test_jobs.py
+  test_operations.py
+  test_ytdlp.py
+  test_server.py
 ```
