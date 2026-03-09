@@ -1,11 +1,7 @@
+import orjson
+
 from . import operations
 from . import presets
-
-# Re-export preset functions for the CLI
-list_presets_command = presets.list_presets
-save_preset_command = presets.save_preset_command
-delete_preset_command = presets.delete_preset
-edit_preset_command = presets.edit_preset_command
 
 # --- FFmpeg Function Handlers ---
 
@@ -34,9 +30,8 @@ def crop_video_handler(args):
     operations.crop_video(args.input, args.output, args.width, args.height, args.x, args.y)
 
 def get_video_info_handler(args):
-    import json
     info = operations.get_video_info(args.input)
-    print(json.dumps(info, indent=4))
+    print(orjson.dumps(info, option=orjson.OPT_INDENT_2).decode())
 
 def add_subtitles_handler(args):
     operations.add_subtitles(args.input, args.output, args.subs)
@@ -65,7 +60,6 @@ def slideshow_handler(args):
                                 audio_file=args.audio,
                                 resize_mode=args.resize_mode,
                                 pad_color=args.pad_color,
-                                crop_position=args.crop_position,
                                 sanitize_crop=args.sanitize_crop,
                                 sanitize_noise=args.sanitize_noise)
 
@@ -80,27 +74,6 @@ def delete_preset_handler(args):
 def edit_preset_handler(args):
     presets.edit_preset_command(args.name)
 
-def save_preset_handler(args):
-    # This handler is now simplified and doesn't cause a circular import
-    print("Error: Saving presets from the command line is being redesigned.")
-    print("Please edit the 'presets/ffmpeg_presets.json' file manually for now.")
-
-def merge_videos_handler(args):
-    print("The 'merge' command has not been implemented in this build.")
-
-# --- Batch Handlers (Corrected Syntax) ---
-
-def batch_convert_handler(args):
-    print("Batch convert not implemented yet.")
-
-def batch_resize_handler(args):
-    print("Batch resize not implemented yet.")
-
-def batch_cut_handler(args):
-    print("Batch cut not implemented yet.")
-
-def batch_extract_audio_handler(args):
-    print("Batch extract audio not implemented yet.")
 
 def add_audio_handler(args):
     mode = "mix" if args.mix else "replace"

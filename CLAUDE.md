@@ -4,18 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Code and Writing Style Guidelines
 
-- **No emojis** in code, display names, or documentation
-- Keep all naming and display text professional
-- Avoid "Enhanced", "Advanced", "Ultimate" type prefixes - use descriptive names instead
-- Clean, simple names that describe what they do
-
-## Working with 3rd Party Libraries
-
-- Ensure you search for the latest llms.txt or Python docs for the library you are using or proposing
-- If the latest docs are not available, search for the latest version of the library on the official website or GitHub repository
-- Prioritize the latest code and docs over your own training data
-- Use the latest version of the library over older versions
-- Prioritize libraries that are actively maintained and have a large community
+- Always use `uv`
 
 ## FFmpeg Usage
 
@@ -44,7 +33,7 @@ Both interfaces share the same core operations in `operations.py`. The web serve
 
 - **server.py**: FastAPI application with REST API and WebSocket. Handles authentication (bcrypt + JWT), file upload/download, job creation and tracking, and real-time progress via WebSocket. File registry is persisted to `data/file_registry.json`. Jobs run in worker threads via `asyncio.to_thread` with thread-safe broadcast using `loop.call_soon_threadsafe`.
 
-- **security.py**: Password hashing (bcrypt), JWT token creation/verification (python-jose), input sanitization (filename, path traversal, YouTube URL validation), and per-IP rate limiting.
+- **security.py**: Password hashing (bcrypt), JWT token creation/verification (python-jose), input sanitization (filename, download URL validation), and per-IP rate limiting.
 
 - **jobs.py**: `Job` dataclass with status tracking and `JobManager` with `asyncio.Semaphore`-based concurrency limiting (default 2). Jobs are in-memory only (no database).
 
@@ -92,7 +81,7 @@ uv run uvicorn vidtools.server:app --host 0.0.0.0 --port 8910
 uv run pytest tests/ -v
 ```
 
-84 tests across 5 test files (security, jobs, operations, ytdlp, server).
+95 tests across 5 test files (security, jobs, operations, ytdlp, server).
 
 ### Adding New Operations
 
@@ -109,7 +98,7 @@ uv run pytest tests/ -v
 
 - Python >=3.12
 - ffmpeg and ffprobe (must be in PATH)
-- yt-dlp (must be in PATH, for YouTube downloads)
+- yt-dlp (must be in PATH, for URL downloads)
 - Python packages: see `pyproject.toml` -- key ones are fastapi, uvicorn, bcrypt, python-jose, yt-dlp, orjson, tqdm, structlog
 - Optional: textual (for TUI)
 
@@ -131,7 +120,6 @@ uv run pytest tests/ -v
 
 - All file paths in the code use absolute paths
 - FFmpeg commands are executed via subprocess with proper error handling
-- The merge command is currently a stub and not implemented
 - Preset modifications are immediately saved to disk
 - Jobs are in-memory only; they don't survive server restarts
 - File registry persists to disk and is pruned on startup

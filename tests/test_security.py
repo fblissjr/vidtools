@@ -1,10 +1,6 @@
 """Tests for vidtools.security module."""
 
 import time
-import tempfile
-from pathlib import Path
-
-import pytest
 
 from vidtools.security import (
     hash_password,
@@ -12,8 +8,7 @@ from vidtools.security import (
     create_token,
     verify_token,
     sanitize_filename,
-    validate_path,
-    validate_youtube_url,
+    validate_download_url,
     RateLimiter,
 )
 
@@ -115,76 +110,39 @@ class TestSanitizeFilename:
         assert "\x00" not in result
 
 
-class TestValidatePath:
-    def test_valid_path_within_root(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            allowed = Path(tmpdir)
-            test_file = allowed / "test.mp4"
-            test_file.touch()
-            result = validate_path(str(test_file), allowed)
-            assert result == test_file.resolve()
-
-    def test_path_traversal_rejected(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            allowed = Path(tmpdir)
-            with pytest.raises(ValueError, match="outside allowed"):
-                validate_path("../../etc/passwd", allowed)
-
-    def test_symlink_escape_rejected(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            allowed = Path(tmpdir)
-            link = allowed / "sneaky_link"
-            link.symlink_to("/etc/passwd")
-            with pytest.raises(ValueError, match="outside allowed"):
-                validate_path(str(link), allowed)
-
-    def test_absolute_path_outside_root(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            allowed = Path(tmpdir)
-            with pytest.raises(ValueError, match="outside allowed"):
-                validate_path("/etc/passwd", allowed)
-
-    def test_relative_path_resolved(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            allowed = Path(tmpdir)
-            subdir = allowed / "sub"
-            subdir.mkdir()
-            test_file = subdir / "test.mp4"
-            test_file.touch()
-            result = validate_path("sub/test.mp4", allowed)
-            assert result == test_file.resolve()
-
-
-class TestValidateYoutubeUrl:
+class TestValidateDownloadUrl:
     def test_valid_youtube_url(self):
-        assert validate_youtube_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ") is True
+        assert validate_download_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ") is True
 
     def test_valid_youtu_be_url(self):
-        assert validate_youtube_url("https://youtu.be/dQw4w9WgXcQ") is True
+        assert validate_download_url("https://youtu.be/dQw4w9WgXcQ") is True
 
     def test_valid_youtube_no_www(self):
-        assert validate_youtube_url("https://youtube.com/watch?v=abc123") is True
+        assert validate_download_url("https://youtube.com/watch?v=abc123") is True
 
     def test_valid_youtube_music(self):
-        assert validate_youtube_url("https://music.youtube.com/watch?v=abc123") is True
+        assert validate_download_url("https://music.youtube.com/watch?v=abc123") is True
 
-    def test_invalid_domain(self):
-        assert validate_youtube_url("https://evil.com/watch?v=abc123") is False
+    def test_valid_vimeo_url(self):
+        assert validate_download_url("https://vimeo.com/123456789") is True
 
-    def test_no_protocol(self):
-        assert validate_youtube_url("youtube.com/watch?v=abc123") is False
+    def test_valid_twitter_url(self):
+        assert validate_download_url("https://x.com/user/status/123456") is True
 
     def test_empty_url(self):
-        assert validate_youtube_url("") is False
+        assert validate_download_url("") is False
+
+    def test_http_rejected(self):
+        assert validate_download_url("http://www.youtube.com/watch?v=abc123") is False
+
+    def test_no_protocol(self):
+        assert validate_download_url("youtube.com/watch?v=abc123") is False
 
     def test_command_injection(self):
-        assert validate_youtube_url("https://youtube.com/watch?v=abc; rm -rf /") is False
-
-    def test_http_url(self):
-        assert validate_youtube_url("http://www.youtube.com/watch?v=abc123") is True
+        assert validate_download_url("https://youtube.com/watch?v=abc; rm -rf /") is False
 
     def test_playlist_url(self):
-        assert validate_youtube_url("https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf") is True
+        assert validate_download_url("https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf") is True
 
 
 class TestRateLimiter:

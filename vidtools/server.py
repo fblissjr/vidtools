@@ -35,7 +35,7 @@ from .security import (
     create_token,
     hash_password,
     sanitize_filename,
-    validate_youtube_url,
+    validate_download_url,
     verify_password,
     verify_token,
 )
@@ -591,8 +591,8 @@ async def create_job(request: Request):
 
     if op == "ytdlp":
         url = body.get("url", "")
-        if not validate_youtube_url(url):
-            raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+        if not validate_download_url(url):
+            raise HTTPException(status_code=400, detail="Invalid download URL")
         job = job_manager.create_job(op, params, url=url)
         work_fn = _run_ytdlp_job
     else:

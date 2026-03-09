@@ -1,6 +1,6 @@
-"""yt-dlp wrapper for downloading YouTube content.
+"""yt-dlp wrapper for downloading video/audio content.
 
-Downloads video/audio from YouTube via subprocess with progress parsing.
+Downloads video/audio from URLs via subprocess with progress parsing.
 """
 
 import re
@@ -52,7 +52,7 @@ def build_ytdlp_command(
     """Build a yt-dlp command list (no shell=True).
 
     Args:
-        url: YouTube URL to download.
+        url: URL to download.
         output_path: Full output file path.
         format_type: One of 'mp3', 'wav', 'mp4'.
         max_duration: Max video duration in seconds. None to disable.
@@ -100,10 +100,10 @@ def download(
     progress_callback: Callable | None = None,
     max_duration: int | None = DEFAULT_MAX_DURATION,
 ) -> str:
-    """Download a YouTube video/audio.
+    """Download video/audio from a URL.
 
     Args:
-        url: YouTube URL.
+        url: URL to download.
         output_path: Output file path (may be modified by yt-dlp for audio extraction).
         format_type: 'mp3', 'wav', or 'mp4'.
         progress_callback: Optional callback(percent: int, message: str).

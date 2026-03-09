@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.0
+
+### Changed
+- URL downloads now accept any HTTPS URL (not just YouTube) via yt-dlp's broad site support
+- Renamed `validate_youtube_url` to `validate_download_url` with HTTPS-only validation
+- Switched all remaining `json` usage to `orjson` (presets, operations, CLI info output)
+- Web UI "YouTube" tab renamed to "Download" with generic labeling
+
+### Removed
+- Dead stub commands: merge, batch (convert/resize/cut/extract-audio), preset save
+- Unused progress listener system from JobManager
+- Unused `validate_path` function from security module
+- Unused `crop_position` parameter from slideshow operation
+- Dead re-exports and unused imports
+
+### Added
+- `.gitkeep` files for `data/` and `internal/` directory structure
+- `_add_faststart_if_mp4` and `_add_time_range_args` helpers in operations.py
+
 ## 0.3.0
 
 ### Added

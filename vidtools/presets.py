@@ -1,6 +1,7 @@
-import json
 import os
 from typing import Dict, Any
+
+import orjson
 from .utils import logger  # Import logger from utils
 
 # --- Configuration and Presets ---
@@ -60,7 +61,7 @@ DEFAULT_PRESETS = {
         "quality": "30",
         "vbitrate": None,
         "abitrate": "128k",
-        "description": "WebM for social sharing, YouTube)."
+        "description": "WebM for social sharing."
     },
 }
 
@@ -71,15 +72,15 @@ def load_presets() -> Dict[str, Dict[str, Any]]:
         if not os.path.exists(PRESET_FOLDER):
             os.makedirs(PRESET_FOLDER)
 
-        with open(PRESET_FILE, "r") as f:
-            presets = json.load(f)
+        with open(PRESET_FILE, "rb") as f:
+            presets = orjson.loads(f.read())
             merged_presets = {**DEFAULT_PRESETS, **presets}  # Merge loaded with defaults
             logger.debug("Presets loaded from file", file=PRESET_FILE, loaded_count=len(presets), merged_count=len(merged_presets)) # Logging preset load
             return merged_presets
     except FileNotFoundError:
         logger.warning("Preset file not found, using default presets.", file=PRESET_FILE) # Logging file not found
         return DEFAULT_PRESETS
-    except json.JSONDecodeError as e:
+    except orjson.JSONDecodeError as e:
         logger.error("Invalid JSON in preset file, using default presets.", file=PRESET_FILE, error=str(e)) # Logging JSON error
         return DEFAULT_PRESETS
 
@@ -90,8 +91,8 @@ def save_presets(presets: Dict[str, Dict[str, Any]]):
         if not os.path.exists(PRESET_FOLDER):
             os.makedirs(PRESET_FOLDER)
 
-        with open(PRESET_FILE, "w") as f:
-            json.dump(presets, f, indent=4)
+        with open(PRESET_FILE, "wb") as f:
+            f.write(orjson.dumps(presets, option=orjson.OPT_INDENT_2))
         logger.info("Presets saved to file", file=PRESET_FILE, preset_count=len(presets)) # Logging preset save
     except Exception as e:
         logger.error("Error saving presets to file", file=PRESET_FILE, error=str(e), exc_info=True) # Logging save error

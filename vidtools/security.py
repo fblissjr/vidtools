@@ -84,41 +84,24 @@ def sanitize_filename(name: str) -> str:
     return name
 
 
-def validate_path(path_str: str, allowed_root: Path) -> Path:
-    """Validate a file path is within allowed_root. Returns resolved Path.
 
-    Raises ValueError if the path escapes the allowed directory.
-    """
-    allowed_root = allowed_root.resolve()
-
-    # If relative, resolve against allowed_root
-    candidate = Path(path_str)
-    if not candidate.is_absolute():
-        candidate = allowed_root / candidate
-
-    resolved = candidate.resolve()
-
-    if not str(resolved).startswith(str(allowed_root)):
-        raise ValueError(f"Path '{path_str}' resolves outside allowed directory")
-
-    return resolved
-
-
-# YouTube URL validation
-_YOUTUBE_URL_PATTERN = re.compile(
-    r"^https?://"
-    r"(www\.)?"
-    r"(youtube\.com|youtu\.be|music\.youtube\.com)"
-    r"/[a-zA-Z0-9_\-?&=%./]+"
+# Download URL validation
+_DOWNLOAD_URL_PATTERN = re.compile(
+    r"^https://"
+    r"[a-zA-Z0-9\-.]+"
+    r"(/[a-zA-Z0-9_\-?&=%./]*)?"
     r"$"
 )
 
 
-def validate_youtube_url(url: str) -> bool:
-    """Check that a URL is a valid YouTube URL. Rejects other domains."""
+def validate_download_url(url: str) -> bool:
+    """Check that a URL is a valid HTTPS URL safe for download.
+
+    Rejects empty strings, non-HTTPS schemes, and URLs with shell-injection characters.
+    """
     if not url:
         return False
-    return _YOUTUBE_URL_PATTERN.match(url) is not None
+    return _DOWNLOAD_URL_PATTERN.match(url) is not None
 
 
 class RateLimiter:

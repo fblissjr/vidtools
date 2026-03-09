@@ -46,7 +46,7 @@
       tab.addEventListener("click", () => switchTab(tab.dataset.tab));
     });
 
-    // YouTube
+    // Download format
     $$(".format-btn").forEach(btn => {
       btn.addEventListener("click", () => {
         $$(".format-btn").forEach(b => b.classList.remove("active"));
@@ -132,7 +132,7 @@
     if (name === "files") loadFiles();
   }
 
-  // --- YouTube Download ---
+  // --- URL Download ---
   async function handleYtDownload() {
     const url = $("#yt-url").value.trim();
     if (!url) return;

@@ -67,7 +67,6 @@ class JobManager:
         self.max_concurrent = max_concurrent
         self.jobs: dict[str, Job] = {}
         self._semaphore: asyncio.Semaphore | None = None
-        self._progress_listeners: list[Callable] = []
 
     def _get_semaphore(self) -> asyncio.Semaphore:
         """Lazy init semaphore (needs running event loop)."""
@@ -118,17 +117,6 @@ class JobManager:
         for jid in to_remove:
             del self.jobs[jid]
 
-    def add_progress_listener(self, listener: Callable):
-        """Register a callback for progress updates."""
-        self._progress_listeners.append(listener)
-
-    def remove_progress_listener(self, listener: Callable):
-        """Remove a progress listener."""
-        try:
-            self._progress_listeners.remove(listener)
-        except ValueError:
-            pass
-
     async def run_job(self, job: Job, work_fn: Callable):
         """Run a job with concurrency limiting.
 
@@ -144,7 +132,6 @@ class JobManager:
             job.started_at = time.time()
 
             try:
-                await self._notify_progress(job)
                 await asyncio.to_thread(work_fn, job, job.update_progress)
                 if job.status == JobStatus.CANCELLED:
                     return
@@ -155,16 +142,3 @@ class JobManager:
                 job.status = JobStatus.FAILED
                 job.error = str(e)
                 job.completed_at = time.time()
-            finally:
-                await self._notify_progress(job)
-
-    async def _notify_progress(self, job: Job):
-        """Notify all registered progress listeners."""
-        for listener in self._progress_listeners:
-            try:
-                if asyncio.iscoroutinefunction(listener):
-                    await listener(job)
-                else:
-                    listener(job)
-            except Exception:
-                pass

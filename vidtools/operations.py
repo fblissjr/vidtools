@@ -1,11 +1,10 @@
-import sys
 import subprocess
 import re
 import os
-import json
+import orjson
 import glob
 import tempfile
-from typing import Callable, Sequence
+from typing import Callable
 from pathlib import Path
 from PIL import Image, ImageOps, ImageFilter
 import numpy as np
@@ -13,6 +12,23 @@ import datetime
 
 from .utils import run_ffmpeg_command, logger
 from . import presets
+
+
+# --- Helpers ---
+
+def _add_faststart_if_mp4(command: list, output_file: str):
+    if output_file.lower().endswith('.mp4'):
+        command.extend(["-movflags", "+faststart"])
+
+
+def _add_time_range_args(command: list, start_time=None, end_time=None, duration=None):
+    if start_time:
+        command.extend(["-ss", str(start_time)])
+    if end_time:
+        command.extend(["-to", str(end_time)])
+    elif duration:
+        command.extend(["-t", str(duration)])
+
 
 # --- Core FFmpeg Functions ---
 
@@ -42,8 +58,7 @@ def cut_video(input_file, output_file, start_time=None, end_time=None, duration=
             command.extend(["-crf", str(crf)])
     if fix_sync:
         command.extend(["-async", "1"])
-    if output_file.lower().endswith('.mp4'):
-        command.extend(["-movflags", "+faststart"])
+    _add_faststart_if_mp4(command, output_file)
     command.append(output_file)
     run_ffmpeg_command(command, progress_callback=progress_callback)
 
@@ -61,8 +76,7 @@ def resize_video(input_file, output_file, percentage=None, width=None, height=No
         raise ValueError("You must specify a percentage, width, or height.")
 
     command = ["ffmpeg", "-y", "-i", input_file, "-vf", scale_filter, "-c:a", "copy"]
-    if output_file.lower().endswith('.mp4'):
-        command.extend(["-movflags", "+faststart"])
+    _add_faststart_if_mp4(command, output_file)
     command.append(output_file)
     run_ffmpeg_command(command, progress_callback=progress_callback)
 
@@ -90,8 +104,7 @@ def convert_format(input_file, output_file, format_type, video_codec=None, audio
         if quality_scale: command.extend(["-crf", str(quality_scale)])
         else: command.extend(["-crf", "23"])
     if preset: command.extend(["-preset", preset])
-    if output_file.lower().endswith('.mp4'):
-        command.extend(["-movflags", "+faststart"])
+    _add_faststart_if_mp4(command, output_file)
     command.append(output_file)
     run_ffmpeg_command(command, progress_callback=progress_callback)
 
@@ -100,9 +113,7 @@ def extract_audio(input_file, output_file, audio_format="copy", start_time=None,
                   duration=None, progress_callback: Callable | None = None):
     """Extracts audio from video."""
     command = ["ffmpeg", "-y", "-i", input_file, "-vn"]
-    if start_time: command.extend(["-ss", str(start_time)])
-    if end_time: command.extend(["-to", str(end_time)])
-    if duration: command.extend(["-t", str(duration)])
+    _add_time_range_args(command, start_time, end_time, duration)
     command.extend(["-c:a", audio_format])
     command.append(output_file)
     run_ffmpeg_command(command, progress_callback=progress_callback)
@@ -113,9 +124,7 @@ def extract_frames(input_file, output_pattern, frame_rate=1, image_format="image
                    progress_callback: Callable | None = None):
     """Extracts frames from video."""
     command = ["ffmpeg", "-y", "-i", input_file]
-    if start_time: command.extend(["-ss", str(start_time)])
-    if end_time: command.extend(["-to", str(end_time)])
-    if duration: command.extend(["-t", str(duration)])
+    _add_time_range_args(command, start_time, end_time, duration)
     command.extend(["-r", str(frame_rate), "-f", image_format, output_pattern])
     run_ffmpeg_command(command, progress_callback=progress_callback)
 
@@ -131,8 +140,7 @@ def concatenate_videos(input_files, output_file, use_copy=True,
     try:
         command = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file_path]
         command.extend(["-c", "copy" if use_copy else "libx264"])
-        if output_file.lower().endswith('.mp4'):
-            command.extend(["-movflags", "+faststart"])
+        _add_faststart_if_mp4(command, output_file)
         command.append(output_file)
         run_ffmpeg_command(command, progress_callback=progress_callback)
     finally:
@@ -167,7 +175,7 @@ def get_video_info(input_file):
     """Gets video information using ffprobe."""
     command = ["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", input_file]
     result = subprocess.run(command, capture_output=True, text=True, check=True)
-    return json.loads(result.stdout)
+    return orjson.loads(result.stdout)
 
 
 def apply_preset(input_file, output_file, preset_name,
@@ -228,7 +236,7 @@ def _parse_crop_value(value_str: str, dimension: int) -> int:
 
 def create_slideshow(image_pattern: str, output_file: str, duration_per_image: float = 3.0, fps: int = 24,
                      size: str | None = None, audio_file: str | None = None,
-                     resize_mode: str = "stretch", pad_color: str = "0,0,0", crop_position: str = "center",
+                     resize_mode: str = "stretch", pad_color: str = "0,0,0",
                      sanitize_crop: str | None = None, sanitize_noise: int | None = None,
                      progress_callback: Callable | None = None):
     """Creates a slideshow video from a sequence of images using the PIL + FFmpeg pipeline."""
@@ -297,8 +305,7 @@ def create_slideshow(image_pattern: str, output_file: str, duration_per_image: f
 
         command.extend(["-c:v", "libx264", "-r", str(fps), "-pix_fmt", "yuv420p"])
         command.extend(["-c:a", "aac", "-shortest"])
-        if output_file.lower().endswith('.mp4'):
-            command.extend(["-movflags", "+faststart"])
+        _add_faststart_if_mp4(command, output_file)
         command.append(output_file)
 
         logger.info("Creating slideshow video")
@@ -340,8 +347,7 @@ def add_audio(input_file: str, audio_file: str, output_file: str,
         else:
             filter_expr = "[0:a][1:a]amix=inputs=2:duration=shortest"
         command.extend(["-filter_complex", filter_expr, "-map", "0:v", "-c:v", "copy"])
-    if output_file.lower().endswith('.mp4'):
-        command.extend(["-movflags", "+faststart"])
+    _add_faststart_if_mp4(command, output_file)
     command.append(output_file)
     run_ffmpeg_command(command, progress_callback=progress_callback)
 

@@ -92,64 +92,6 @@ def setup_argparse() -> argparse.ArgumentParser:
                           help="Strip audio stream entirely")
     sanitize.set_defaults(func=main_module.sanitize_video_handler)
 
-    # ---------------------------------------------------------------- merge ---
-    merge = subparsers.add_parser(
-        "merge",
-        help=(
-            "Merge two or more clips with a visual transition and optional "
-            "audio cross‑fade."
-        ),
-        formatter_class=argparse.RawTextHelpFormatter,
-    )
-    merge.add_argument(
-        "clips",
-        nargs="+",
-        help="Input clips in the order they should appear (≥2 required)",
-    )
-    merge.add_argument(
-        "-o", "--output", required=True, help="Output filename (e.g. merged.mp4)"
-    )
-    merge.add_argument(
-        "--transition",
-        default="fade",
-        choices=[
-            "fade",
-            "fadeblack",
-            "fadegrays",
-            "wipeleft",
-            "wiperight",
-            "wipeup",
-            "wipedown",
-            "slideleft",
-            "slideright",
-            "slideup",
-            "slidedown",
-            "circlecrop",
-            "rectcrop",
-            "distance",
-            "radial",
-        ],
-        help="Transition style (FFmpeg xfade types, default: fade)",
-    )
-    merge.add_argument(
-        "--duration",
-        type=float,
-        default=1.0,
-        help="Transition duration in seconds (default 1.0)",
-    )
-    merge.add_argument(
-        "--crf",
-        type=int,
-        default=22,
-        help="x264 CRF quality (default 22)",
-    )
-    merge.add_argument(
-        "--preset",
-        default="slow",
-        help="x264 preset (default: slow)",
-    )
-    merge.set_defaults(func=main_module.merge_videos_handler)
-
     # ---------------------------------------------------------------- cut -----
     cut = subparsers.add_parser(
         "cut",
@@ -412,64 +354,6 @@ Note: For stream copy mode, all inputs must have the same codec parameters."""
     )
     info.set_defaults(func=main_module.get_video_info_handler)
 
-    # ---------------------------------------------------------------- batch ---
-    batch = subparsers.add_parser(
-        "batch",
-        help="Batch process multiple files",
-        formatter_class=argparse.RawTextHelpFormatter,
-        description="""Batch process multiple files with the same operation.
-
-Examples:
-  # Convert all webp files to mp4
-  %(prog)s convert "*.webp" --format mp4
-
-  # Resize all videos in a folder to 50%%
-  %(prog)s resize "videos/*.mp4" --scale 0.5
-
-  # Extract audio from all videos
-  %(prog)s extract-audio "*.mp4" --format mp3
-
-  # Cut same segment from multiple videos
-  %(prog)s cut "*.mp4" --start 10 --duration 30"""
-    )
-    batch_sub = batch.add_subparsers(dest="batch_operation", help="Operation to perform")
-
-    # Batch convert
-    batch_convert = batch_sub.add_parser("convert", help="Batch convert files")
-    batch_convert.add_argument("pattern", help="File pattern (e.g., '*.webp')")
-    batch_convert.add_argument("-f", "--format", help="Output format (auto-detect from extension if not set)")
-    batch_convert.add_argument("-o", "--output-dir", help="Output directory (default: same as source)")
-    batch_convert.add_argument("--suffix", help="Add suffix to output filename (e.g., '_converted')")
-    batch_convert.add_argument("--overwrite", action="store_true", help="Overwrite existing files")
-    batch_convert.set_defaults(func=main_module.batch_convert_handler)
-
-    # Batch resize
-    batch_resize = batch_sub.add_parser("resize", help="Batch resize videos")
-    batch_resize.add_argument("pattern", help="File pattern")
-    batch_resize.add_argument("-s", "--scale", type=float, help="Scale factor (e.g., 0.5)")
-    batch_resize.add_argument("-W", "--width", type=int, help="Target width")
-    batch_resize.add_argument("-H", "--height", type=int, help="Target height")
-    batch_resize.add_argument("-o", "--output-dir", help="Output directory")
-    batch_resize.add_argument("--suffix", default="_resized", help="Add suffix to filename")
-    batch_resize.set_defaults(func=main_module.batch_resize_handler)
-
-    # Batch cut
-    batch_cut = batch_sub.add_parser("cut", help="Batch cut videos")
-    batch_cut.add_argument("pattern", help="File pattern")
-    batch_cut.add_argument("--start", help="Start time")
-    batch_cut.add_argument("--end", help="End time")
-    batch_cut.add_argument("--duration", help="Duration")
-    batch_cut.add_argument("-o", "--output-dir", help="Output directory")
-    batch_cut.add_argument("--suffix", default="_cut", help="Add suffix to filename")
-    batch_cut.set_defaults(func=main_module.batch_cut_handler)
-
-    # Batch extract audio
-    batch_audio = batch_sub.add_parser("extract-audio", help="Batch extract audio")
-    batch_audio.add_argument("pattern", help="File pattern")
-    batch_audio.add_argument("-f", "--format", default="mp3", help="Audio format (default: mp3)")
-    batch_audio.add_argument("-o", "--output-dir", help="Output directory")
-    batch_audio.set_defaults(func=main_module.batch_extract_audio_handler)
-
     # ---------------------------------------------------------------- presets -
     preset_parser = subparsers.add_parser(
         "preset",
@@ -487,11 +371,6 @@ Examples:
     # List presets
     list_p = preset_sub.add_parser("list", help="List available presets")
     list_p.set_defaults(func=main_module.list_presets_handler)
-
-    # Save preset
-    save = preset_sub.add_parser("save", help="Save current command as preset")
-    save.add_argument("name", help="Preset name")
-    save.set_defaults(func=main_module.save_preset_handler)
 
     # Delete preset
     delete = preset_sub.add_parser("delete", help="Delete a preset")
@@ -540,10 +419,6 @@ Examples:
     slideshow.add_argument(
         "--pad-color", default="0,0,0",
         help="RGB color for padding when using 'pad' mode (e.g., '255,255,255' for white)."
-    )
-    slideshow.add_argument(
-        "--crop-position", choices=["center", "top", "bottom", "left", "right"], default="center",
-        help="Position of the crop when using 'crop' mode (default: center)."
     )
     slideshow.add_argument("--audio", type=lambda x: is_valid_file(slideshow, x),
                            help="Path to an audio file to add as a soundtrack.")

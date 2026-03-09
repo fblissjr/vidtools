@@ -8,7 +8,7 @@ Two ways to use it:
 
 ## Quick start
 
-Requires Python 3.12+, ffmpeg, and ffprobe in PATH. yt-dlp is optional (for YouTube downloads).
+Requires Python 3.12+, ffmpeg, and ffprobe in PATH.
 
 ```bash
 # Install
@@ -27,7 +27,7 @@ On first visit to the web UI, you'll set a password. After that, all access requ
 
 The server exposes a mobile-first interface with three tabs:
 
-- **YouTube Download** -- paste a URL, pick MP3/WAV/MP4, download
+- **External Download** -- paste a URL, pick MP3/WAV/MP4, download
 - **Process File** -- upload a video, pick an operation (cut, resize, convert, etc.), run it
 - **My Files** -- browse uploaded and output files, download or delete them
 
@@ -147,11 +147,3 @@ tests/
   test_ytdlp.py      # 16 tests
   test_server.py     # 3 tests
 ```
-
-## Dependencies
-
-Runtime: tqdm, structlog, Pillow, numpy, fastapi, uvicorn, python-multipart, python-jose, bcrypt, yt-dlp, orjson
-
-Optional: textual (for TUI)
-
-System: ffmpeg, ffprobe, yt-dlp (all must be in PATH)
