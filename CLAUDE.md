@@ -40,7 +40,7 @@ Both interfaces share the same core operations in `operations.py`. The web serve
 
 - **jobs.py**: `Job` dataclass with status tracking and `JobManager` with `asyncio.Semaphore`-based concurrency limiting (default 2). Jobs are in-memory only (no database).
 
-- **ytdlp.py**: yt-dlp subprocess wrapper. Uses `--print after_move:filepath` for reliable output filename detection. Parses progress from stdout. Supports MP3, WAV, MP4 formats with optional max duration limit. Download URLs are validated as HTTPS-only in `security.py:validate_download_url()` (not YouTube-specific).
+- **ytdlp.py**: yt-dlp subprocess wrapper. Uses `--print after_move:filepath` for reliable output filename detection. Parses progress from stdout. Supports MP3, WAV, MP4 formats with optional max duration limit. Download URLs are validated as HTTPS-only in `security.py:validate_download_url()`
 
 - **presets.py**: Preset management system for saving and loading FFmpeg configurations. Stores presets in `presets/ffmpeg_presets.json`.
 

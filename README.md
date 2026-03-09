@@ -1,6 +1,6 @@
 # vidtools
 
-FFmpeg + yt-dlp wrapper with a web UI and CLI. Built because I always forget ffmpeg flags.
+Video tools wrapper with a web UI and CLI. Built because I always forget ffmpeg flags.
 
 Two ways to use it:
 1. **Web UI** -- mobile-first browser interface, designed so my wife can use it from her phone on our local network
