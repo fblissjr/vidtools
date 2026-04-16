@@ -100,8 +100,17 @@ def setup_argparse() -> argparse.ArgumentParser:
     # ---------------------------------------------------------------- sanitize
     sanitize = subparsers.add_parser(
         "sanitize",
-        help="Auto‑crop bottom banner, add light noise, strip metadata/SEI",
+        help="Auto-crop letterbox, add noise, re-encode A+V, strip metadata",
         formatter_class=argparse.RawTextHelpFormatter,
+        description="""Defeat common content-fingerprinting on a video:
+  - Auto-crop letterbox using cropdetect (full W:H:X:Y, not just bottom)
+  - Add light noise to defeat perceptual-hash matching
+  - Re-encode video (libx264) and audio (AAC by default) to break hash matches
+  - Strip container AND stream metadata (-map_metadata + -map_metadata:s)
+  - Suppress ffmpeg encoder string in output (-fflags +bitexact)
+
+Use --keep-audio if you need the original audio bytes preserved (faster but
+audio fingerprints survive). Use --no-audio to strip audio entirely.""",
     )
     sanitize.add_argument("input",  type=lambda x: is_valid_file(sanitize, x))
     sanitize.add_argument("output")
@@ -109,37 +118,43 @@ def setup_argparse() -> argparse.ArgumentParser:
         "--limit", type=int, default=24, help="cropdetect limit (default 24)"
     )
     sanitize.add_argument(
-        "--noise", type=int, default=6, help="Noise amplitude 0‑100 (default 6)"
+        "--noise", type=int, default=6, help="Noise amplitude 0-100 (default 6)"
     )
     sanitize.add_argument(
         "--extra-bottom",
         type=int,
         default=0,
         metavar="PX",
-        help="Crop PX more pixels off the bottom *after* auto‑detect",
+        help="Crop PX more pixels off the bottom *after* auto-detect",
     )
     sanitize.add_argument(
         "--manual-crop",
         metavar="EXPR",
         default=None,
-        help="Explicit crop expression (e.g. 'iw:floor(ih*0.9/2)*2:0:0'). "
-        "If set, auto‑detection is skipped and this crop is used verbatim.",
+        help="Explicit crop expression W:H:X:Y. Skips auto-detect.",
     )
     sanitize.add_argument(
         "--crf", type=int, default=22, help="x264 CRF quality (default 22)"
     )
-    sanitize.add_argument(
-        "--aac",
-        action="store_true",
-        help="Re‑encode audio to AAC 128 kb/s (default: copy)",
+    audio_grp = sanitize.add_mutually_exclusive_group()
+    audio_grp.add_argument(
+        "--keep-audio", action="store_true",
+        help="Stream-copy original audio (faster but audio fingerprints survive)",
     )
-    sanitize.add_argument("--no-audio", action="store_true",
-                          help="Strip audio stream entirely")
+    audio_grp.add_argument(
+        "--no-audio", action="store_true",
+        help="Strip audio stream entirely",
+    )
     def _sanitize(args):
+        if args.no_audio:
+            mode = "none"
+        elif args.keep_audio:
+            mode = "copy"
+        else:
+            mode = "aac"  # default: re-encode
         operations.sanitize_video(input_file=args.input, output_file=args.output, limit=args.limit,
                                   noise=args.noise, crf=args.crf, extra_bottom=args.extra_bottom,
-                                  manual_crop=args.manual_crop,
-                                  audio_mode=("none" if args.no_audio else "aac" if args.aac else "copy"))
+                                  manual_crop=args.manual_crop, audio_mode=mode)
     sanitize.set_defaults(func=_sanitize)
 
     # ---------------------------------------------------------------- cut -----

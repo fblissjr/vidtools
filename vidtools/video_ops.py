@@ -247,27 +247,51 @@ def _probe_dimensions(path: str) -> tuple[int, int]:
 
 
 def sanitize_video(*, input_file: str, output_file: str, limit: int = 24, noise: int = 6, crf: int = 22,
-                   extra_bottom: int = 0, manual_crop: str | None = None, audio_mode: str = "copy"):
-    """Auto-crop, add noise, and clean metadata from a video."""
+                   extra_bottom: int = 0, manual_crop: str | None = None, audio_mode: str = "aac"):
+    """Auto-crop letterbox, add noise, re-encode, and strip identifying metadata.
+
+    What this defeats:
+      - Container and stream metadata fingerprints (-map_metadata + -map_metadata:s)
+      - ffmpeg encoder version leak in output (-fflags +bitexact)
+      - Pixel-level perceptual hashes (noise filter + libx264 re-encode)
+      - Audio fingerprint matching (default audio_mode='aac' re-encodes; pass
+        audio_mode='copy' to preserve the original audio bytes)
+
+    Cropdetect uses the ffmpeg-returned W:H:X:Y so top letterbox is also
+    removed, not just bottom. extra_bottom shaves additional pixels from the
+    detected height.
+    """
     if manual_crop:
         crop_expr = manual_crop
     else:
         detect_cmd = ["ffmpeg", "-hide_banner", "-i", input_file, "-vf", f"cropdetect=limit={limit}:round=2", "-frames:v", "300", "-f", "null", "-"]
         detect = subprocess.run(detect_cmd, stderr=subprocess.PIPE, text=True)
-        matches = re.findall(r"crop=([0-9:]+)", detect.stderr)
+        matches = re.findall(r"crop=([0-9]+:[0-9]+:[0-9]+:[0-9]+)", detect.stderr)
         if not matches:
             crop_expr = "iw:ih:0:0"
         else:
-            _, h_str, _, _ = matches[-1].split(":")
+            w_str, h_str, x_str, y_str = matches[-1].split(":")
             new_h = max(2, (int(h_str) - extra_bottom)) & ~1
-            crop_expr = f"iw:{new_h}:0:0"
+            crop_expr = f"{w_str}:{new_h}:{x_str}:{y_str}"
 
     vf_chain = f"crop={crop_expr},noise=alls={noise}:allf=t+u"
-    cmd = ["ffmpeg", "-y", "-i", input_file, "-vf", vf_chain, "-map", "0:v", "-map", "0:a?", "-c:v", "libx264",
-           "-crf", str(crf), "-preset", "slow", "-movflags", "+faststart", "-map_metadata", "-1"]
-    if audio_mode == "copy": cmd.extend(["-c:a", "copy"])
-    elif audio_mode == "aac": cmd.extend(["-c:a", "aac", "-b:a", "128k"])
-    else: cmd.append("-an")
+    cmd = ["ffmpeg", "-y", "-i", input_file,
+           "-vf", vf_chain, "-map", "0:v", "-map", "0:a?",
+           "-c:v", "libx264", "-crf", str(crf), "-preset", "slow",
+           "-flags:v", "+bitexact",
+           "-movflags", "+faststart",
+           "-fflags", "+bitexact",
+           # Strip container metadata, then per-stream metadata, then explicitly
+           # clear the encoder tag the libx264/aac encoders re-add post-encode.
+           "-map_metadata", "-1", "-map_metadata:s", "-1",
+           "-metadata:s:v:0", "encoder="]
+    if audio_mode == "copy":
+        cmd.extend(["-c:a", "copy"])
+    elif audio_mode == "aac":
+        cmd.extend(["-c:a", "aac", "-b:a", "128k", "-flags:a", "+bitexact",
+                    "-metadata:s:a:0", "encoder="])
+    else:
+        cmd.append("-an")
     cmd.append(output_file)
     run_ffmpeg(cmd)
 

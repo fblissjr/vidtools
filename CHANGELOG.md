@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.1
+
+### Changed (sanitize is now actually sanitizing)
+- `sanitize_video` now strips **stream-level** metadata (`-map_metadata:s -1`) in addition to container metadata. The libx264/AAC encoder strings (which the encoders re-add post-encode) are explicitly cleared via `-metadata:s:v:0 encoder=` and `-metadata:s:a:0 encoder=`.
+- `-fflags +bitexact` and `-flags:v +bitexact` suppress the libavformat/libavcodec version strings that previously leaked into the output container/stream tags.
+- `audio_mode` default changed from `"copy"` to `"aac"`. The original audio bytes (and any audio fingerprint) are no longer preserved by default.
+- Cropdetect now uses the full ffmpeg-returned `W:H:X:Y` so top letterbox is also removed, not just bottom (`extra_bottom` still applies to the detected height).
+- CLI: `--aac` is gone (now the default). New `--keep-audio` opts back into stream copy. `--no-audio` unchanged. Help text rewritten to honestly describe what the operation does.
+
 ## 0.8.0
 
 ### Added

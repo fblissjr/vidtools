@@ -8,6 +8,7 @@ from vidtools.operations import (
     apply_preset,
     get_video_info,
     add_audio,
+    sanitize_video,
 )
 
 
@@ -158,6 +159,81 @@ class TestAddAudioCommand:
         add_audio("video.mp4", "audio.mp3", "output.mp4", mode="mix")
 
         assert "-shortest" not in capture_ffmpeg
+
+
+class TestSanitizeVideoCommand:
+    """Test sanitize_video command construction. Uses manual_crop to skip
+    the cropdetect probe pass (which would invoke real ffmpeg)."""
+
+    @pytest.fixture()
+    def capture_ffmpeg(self, monkeypatch):
+        captured = []
+        def mock_run(cmd):
+            captured.extend(cmd)
+        monkeypatch.setattr("vidtools.video_ops.run_ffmpeg", mock_run)
+        return captured
+
+    def test_strips_container_metadata(self, capture_ffmpeg):
+        sanitize_video(input_file="in.mp4", output_file="out.mp4",
+                       manual_crop="iw:ih:0:0")
+        assert "-map_metadata" in capture_ffmpeg
+        idx = capture_ffmpeg.index("-map_metadata")
+        assert capture_ffmpeg[idx + 1] == "-1"
+
+    def test_strips_stream_metadata(self, capture_ffmpeg):
+        """Stream-level metadata (per-track tags) must also be stripped."""
+        sanitize_video(input_file="in.mp4", output_file="out.mp4",
+                       manual_crop="iw:ih:0:0")
+        assert "-map_metadata:s" in capture_ffmpeg
+        idx = capture_ffmpeg.index("-map_metadata:s")
+        assert capture_ffmpeg[idx + 1] == "-1"
+
+    def test_uses_bitexact_to_strip_encoder_string(self, capture_ffmpeg):
+        """ffmpeg writes its own version into output by default. -fflags +bitexact
+        suppresses that so the output doesn't reveal which ffmpeg encoded it."""
+        sanitize_video(input_file="in.mp4", output_file="out.mp4",
+                       manual_crop="iw:ih:0:0")
+        assert "-fflags" in capture_ffmpeg
+        idx = capture_ffmpeg.index("-fflags")
+        assert "+bitexact" in capture_ffmpeg[idx + 1]
+
+    def test_default_audio_mode_reencodes(self, capture_ffmpeg):
+        """Default audio_mode should re-encode to AAC (not copy) so audio
+        fingerprints don't survive sanitization."""
+        sanitize_video(input_file="in.mp4", output_file="out.mp4",
+                       manual_crop="iw:ih:0:0")
+        # Default is 'aac', not 'copy'
+        assert "-c:a" in capture_ffmpeg
+        ca_idx = capture_ffmpeg.index("-c:a")
+        assert capture_ffmpeg[ca_idx + 1] == "aac"
+
+    def test_audio_mode_copy_preserves_stream(self, capture_ffmpeg):
+        """Explicit audio_mode='copy' still works for users who need it."""
+        sanitize_video(input_file="in.mp4", output_file="out.mp4",
+                       manual_crop="iw:ih:0:0", audio_mode="copy")
+        ca_idx = capture_ffmpeg.index("-c:a")
+        assert capture_ffmpeg[ca_idx + 1] == "copy"
+
+    def test_audio_mode_none_strips_audio(self, capture_ffmpeg):
+        sanitize_video(input_file="in.mp4", output_file="out.mp4",
+                       manual_crop="iw:ih:0:0", audio_mode="none")
+        assert "-an" in capture_ffmpeg
+
+    def test_manual_crop_uses_full_expression(self, capture_ffmpeg):
+        """When manual_crop is W:H:X:Y the full expression should be used,
+        not just the height."""
+        sanitize_video(input_file="in.mp4", output_file="out.mp4",
+                       manual_crop="800:600:50:100")
+        vf_idx = capture_ffmpeg.index("-vf")
+        chain = capture_ffmpeg[vf_idx + 1]
+        assert "crop=800:600:50:100" in chain
+
+    def test_noise_filter_in_chain(self, capture_ffmpeg):
+        sanitize_video(input_file="in.mp4", output_file="out.mp4",
+                       manual_crop="iw:ih:0:0", noise=10)
+        vf_idx = capture_ffmpeg.index("-vf")
+        chain = capture_ffmpeg[vf_idx + 1]
+        assert "noise=alls=10" in chain
 
 
 class TestNoProgressCallbackParam:
