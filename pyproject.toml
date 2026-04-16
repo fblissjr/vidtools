@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vidtools"
 version = "0.8.0"
-description = "FFmpeg + yt-dlp video processing tool with web UI and CLI"
+description = "FFmpeg + PIL + yt-dlp media processing tool (video, image, audio) with web UI and CLI"
 readme = "README.md"
 license = {file = "LICENSE"}
 
@@ -34,17 +34,10 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Video",
     "Topic :: Multimedia :: Video :: Conversion",
+    "Topic :: Multimedia :: Sound/Audio :: Conversion",
+    "Topic :: Multimedia :: Graphics",
 ]
-keywords = ["ffmpeg", "video", "conversion", "editing", "multimedia", "yt-dlp"]
-
-[project.optional-dependencies]
-tui = ["textual>=0.40.0"]
-dev = [
-    "pytest>=7.0",
-    "black>=23.0",
-    "ruff>=0.1.0",
-    "mypy>=1.0",
-]
+keywords = ["ffmpeg", "video", "image", "audio", "pil", "conversion", "editing", "multimedia", "yt-dlp"]
 
 [project.scripts]
 vidtools = "vidtools.cli:main"
@@ -54,6 +47,13 @@ vt = "vidtools.cli:main"
 Homepage = "https://github.com/fredbliss/vidtools"
 Repository = "https://github.com/fredbliss/vidtools"
 Issues = "https://github.com/fredbliss/vidtools/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -75,13 +75,9 @@ select = [
     "UP", # pyupgrade
 ]
 ignore = [
-    "E501",  # line too long (handled by black)
+    "E501",  # line too long
     "B008",  # do not perform function calls in argument defaults
 ]
-
-[tool.black]
-line-length = 100
-target-version = ["py312"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -91,8 +87,3 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
-[dependency-groups]
-dev = [
-    "pytest>=9.0.2",
-]
