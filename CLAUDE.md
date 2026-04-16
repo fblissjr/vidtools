@@ -1,129 +1,145 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code working in this repository.
 
-## Code and Writing Style Guidelines
+## Project
 
-- Always use `uv`
-- Use `orjson` everywhere (not `json`). File I/O: `open(..., "rb")` / `open(..., "wb")` since orjson works with bytes.
-- `operations.py` uses `_add_faststart_if_mp4()` and `_add_time_range_args()` helpers -- use them instead of inline patterns.
-- No stub handlers or "not implemented" placeholders -- only add CLI commands when the operation exists in `operations.py`.
+vidtools is an FFmpeg + PIL + yt-dlp media processing tool with two interfaces:
 
-## FFmpeg Usage
+1. **CLI** (argparse) — `vidtools` / `vt` console scripts
+2. **Web UI** (FastAPI + WebSocket + vanilla HTML/CSS/JS) — mobile-first, designed for phone access on a local network
 
-Ensure you always work with the latest ffmpeg documentation and features.
+Both share the same operations. Web server adds auth, persistent jobs, file management, and real-time progress.
 
-## Project Overview
+Python >=3.12. Requires `ffmpeg` >= 5.1 and `yt-dlp` in PATH.
 
-vidtools is an FFmpeg + yt-dlp wrapper with two interfaces:
+## Conventions (READ FIRST)
 
-1. **Web UI** -- FastAPI server with mobile-first HTML/CSS/JS frontend, designed for phone access on a local network
-2. **CLI** -- argparse-based command-line interface for direct terminal usage
-
-Both interfaces share the same core operations in `operations.py`. The web server adds authentication, a job queue, file management, and WebSocket progress updates.
+- **uv only**. Never `pip`/`python -m pip`/bare `python`. Run scripts with `uv run`, install with `uv add`, sync with `uv sync`.
+- **orjson everywhere**, never stdlib `json`. File I/O: `open(..., "rb")` / `open(..., "wb")` since orjson works with bytes.
+- **No `progress_callback` parameter on operations.** Use the thread-local sink: `from .progress import report_progress; report_progress(percent, msg)`. Callers install sinks via `progress_context(sink)`.
+- **No `exit(1)` in library code.** Always raise `FfmpegError` (from `vidtools.progress`). The CLI entrypoint catches and exits.
+- **No stub handlers.** Only register CLI commands when the operation actually exists.
+- **Reuse helpers in `video_ops.py`**: `_add_faststart_if_mp4`, `_add_time_range_args`, `_build_scale_filter`, `_build_transpose_filter`, `_escape_subtitle_path`, `_get_video_encoder`, `_TRANSPOSE_MAP`, `DEFAULT_VIDEO_CODEC`, `DEFAULT_AUDIO_CODEC`. Pipeline.py imports them — don't duplicate.
+- All ffmpeg commands include `-y` to avoid interactive stalls.
 
 ## Architecture
 
-### Core Components
+Modules under `vidtools/`:
 
-- **operations.py**: All FFmpeg operations (cut, resize, convert, extract, crop, rotate, concat, subtitles, sanitize, slideshow, preset apply, video info). Every function accepts an optional `progress_callback: Callable | None` parameter. When present, progress is reported via the callback instead of tqdm. Functions raise `ValueError`/`RuntimeError` on failure instead of printing or calling `sys.exit()`.
+- **operations.py** — thin facade (`from .video_ops import *` etc.). Existing imports (`from vidtools.operations import cut_video`) still work. Add new ops to the appropriate `*_ops.py` file, not here.
+- **video_ops.py** — FFmpeg video operations + shared filter-builder helpers reused by `pipeline.py`.
+- **image_ops.py** — PIL image operations (no ffmpeg). Synchronous; no progress reporting needed.
+- **audio_ops.py** — FFmpeg audio operations including two-pass loudnorm in `normalize_audio`.
+- **utils.py** — `run_ffmpeg(command)`. Single mode. Always raises `FfmpegError`. Reports progress via thread-local sink. Coalesces per-frame events to per-percent (no duplicate updates). Also contains `check_ffmpeg_installed()` (>= 5.1) and `is_valid_file()`.
+- **progress.py** — Thread-local progress sink (~50 lines). `set_progress_sink`, `get_progress_sink`, `report_progress`, `progress_context` (CM with guaranteed cleanup), `FfmpegError`. Same pattern as Python `logging` / Flask `g`.
+- **db.py** — SQLite at `data/vidtools.db` (WAL mode, single connection, threading.Lock). `Database`, `FileRegistry`, `JobStore`, `migrate_legacy_registry`. Repository pattern (no dict mimicry).
+- **jobs.py** — `Job` dataclass + `JobManager`. Jobs persist to `JobStore` at status transitions only (live progress is in-memory). Asyncio.Semaphore caps concurrency at 2. `load_from_store()` rehydrates on startup; `JobStore.fail_unfinished()` marks interrupted jobs as FAILED.
+- **pipeline.py** — `Pipeline` and `PipelineStep`. Chains video ops into a single ffmpeg invocation with combined `-vf` filter chain. Validates: at most one of each step, no `--copy` (filters require re-encode), `sanitize` requires `--manual-crop`. Cut input args pulled to before `-i`; convert always terminal.
+- **cli.py** — argparse setup with handlers defined inline (no separate main.py). `_make_smart` factory + `_detect_kind` for input-type dispatch. `_parse_pipeline_steps` walks argv splitting on op keywords.
+- **server.py** — FastAPI + WebSocket. Lifespan creates Database/FileRegistry/JobStore/JobManager and runs migration. `_OP_DISPATCH` dict maps op names to per-op `_dispatch_*` handlers. `_run_processing_job` is the entry point. `_run_and_broadcast` installs a WebSocket-broadcasting sink in the worker thread.
+- **security.py** — bcrypt + JWT + per-IP rate limiter. URL validation (HTTPS only).
+- **ytdlp.py** — yt-dlp subprocess wrapper. Reports progress via thread-local sink. Uses `--print after_move:filepath` for reliable output filename detection.
+- **presets.py** — Preset management with mtime-based cache. JSON file at `presets/ffmpeg_presets.json`.
+- **web/** — vanilla HTML/CSS/JS. No build step. Mobile-first. Safe DOM construction (no innerHTML). WebSocket reconnect with backoff.
 
-- **utils.py**: `run_ffmpeg_command()` executes ffmpeg subprocesses. Accepts optional `progress_callback` -- when set, calls `progress_callback(percent, message)` and raises `RuntimeError` on failure. When unset, uses tqdm progress bars and `exit(1)` on failure (CLI mode). Also contains `setup_logging()` and file validation helpers.
+## Key patterns
 
-- **cli.py**: Argument parser setup using argparse. Defines all available commands and their parameters. Entry point for command-line usage via `vidtools` or `vt` console scripts.
+1. **Command Flow (CLI)**: argparse → inline handler closure in cli.py → operation in `*_ops.py` → `run_ffmpeg(cmd)`. CLI installs a lazy tqdm sink via `progress_context` in `handle_command`.
+2. **Command Flow (Web)**: POST `/api/jobs` → `_run_processing_job(job)` → `_OP_DISPATCH[op]` handler → operation. `_run_and_broadcast` installs a sink that updates the job and schedules WebSocket broadcasts (only fires on percent change).
+3. **Progress Reporting**: operations call `report_progress(percent, msg)`. Sink is `threading.local()`, isolated per worker thread. No-op if no sink installed.
+4. **Error Handling**: operations raise `FfmpegError` / `ValueError`. Server catches → job FAILED. CLI catches in `main()` → exit 1.
+5. **State Persistence**: `data/vidtools.db` (SQLite WAL). `*.db-wal`/`*.db-shm` gitignored via `data/*` rule. One-time migration of legacy `file_registry.json` runs on first startup, file renamed to `.json.migrated`.
+6. **Crash Recovery**: at startup, `JobStore.fail_unfinished()` marks RUNNING/QUEUED jobs as FAILED with `error="Server restart"`. `FileRegistry.prune_missing()` removes registry entries for deleted files (single batched DELETE).
+7. **Smart Dispatch**: `vidtools resize file.png` and `vidtools resize file.mp4` both work. `_detect_kind(path)` classifies by extension; `.gif` is video. Smart commands: `info`, `crop`, `resize`, `convert`, `cut`. Image-only ops still use `img-*` prefix; audio-only use `audio-*`.
+8. **Pipelines**: `vidtools pipeline in.mp4 out.mp4 cut --start 60 --end 90 resize -p 0.5 convert --crf 20`. Single ffmpeg invocation. Video only.
+9. **Authentication**: bcrypt password in `~/.config/vidtools/config.json`, JWT in httponly cookie.
 
-- **main.py**: CLI handler functions. Each follows the pattern `<operation>_handler(args)` which unpacks argparse args and calls the corresponding function in `operations.py`.
+## Common tasks
 
-- **server.py**: FastAPI application with REST API and WebSocket. Handles authentication (bcrypt + JWT), file upload/download, job creation and tracking, and real-time progress via WebSocket. File registry is persisted to `data/file_registry.json`. Jobs run in worker threads via `asyncio.to_thread` with thread-safe broadcast using `loop.call_soon_threadsafe`.
-
-- **security.py**: Password hashing (bcrypt), JWT token creation/verification (python-jose), input sanitization (filename, download URL validation), and per-IP rate limiting.
-
-- **jobs.py**: `Job` dataclass with status tracking and `JobManager` with `asyncio.Semaphore`-based concurrency limiting (default 2). Jobs are in-memory only (no database).
-
-- **ytdlp.py**: yt-dlp subprocess wrapper. Uses `--print after_move:filepath` for reliable output filename detection. Parses progress from stdout. Supports MP3, WAV, MP4 formats with optional max duration limit. Download URLs are validated as HTTPS-only in `security.py:validate_download_url()`
-
-- **presets.py**: Preset management system for saving and loading FFmpeg configurations. Stores presets in `presets/ffmpeg_presets.json`.
-
-- **web/**: Vanilla HTML/CSS/JS frontend. No build step, no framework. Mobile-first layout with dark/light theme support. Safe DOM construction (no innerHTML). WebSocket reconnect with exponential backoff.
-
-### Key Patterns
-
-1. **Command Flow (CLI)**: CLI args -> Handler Function -> Core Operation -> `run_ffmpeg_command()`
-2. **Command Flow (Web)**: HTTP POST /api/jobs -> `_run_ffmpeg_job()` -> Core Operation with progress_callback -> WebSocket broadcast
-3. **Error Handling**: Operations raise exceptions (not print+exit). Server catches and sets job status to FAILED. CLI handlers print errors.
-4. **Progress Tracking**: `progress_callback(percent, message)` for web mode, tqdm for CLI mode
-5. **Thread Safety**: FFmpeg/yt-dlp run in worker threads via `asyncio.to_thread`. WebSocket broadcasts use `loop.call_soon_threadsafe`.
-6. **Authentication**: bcrypt password hash stored in `~/.config/vidtools/config.json`, JWT session tokens in httponly cookies
-7. **File Registry**: In-memory dict persisted to JSON on every mutation (register/unregister). Pruned on startup for missing files.
-
-## Common Development Tasks
-
-### Running the CLI
+### Run the CLI
 
 ```bash
-# Direct usage
 uv run vidtools <command> [options]
 
-# Examples
-vidtools cut input.mp4 output.mp4 --start 00:00:40 --end 00:01:06.500
-vidtools resize input.mp4 output.mp4 -p 0.5
-vidtools convert input.avi output.mp4
-vidtools info input.mp4
-vidtools preset apply input.mp4 output.mp4 compress_web
+# Smart dispatch (auto-detects type from input extension)
+vidtools info file.{mp4,png,mp3}
+vidtools resize file.mp4 out.mp4 -p 0.5
+vidtools resize file.png out.png -p 0.5
+
+# Explicit prefixes (for full image/audio flag sets)
+vidtools img-resize in.png out.png -p 0.5
+vidtools audio-convert in.wav out.mp3 --bitrate 320k
+
+# Pipelines
+vidtools pipeline in.mp4 out.mp4 cut --start 60 --end 90 resize -p 0.5 convert --crf 20
 ```
 
-### Running the Web Server
+### Run the web server
 
 ```bash
 uv run uvicorn vidtools.server:app --host 0.0.0.0 --port 8910
 ```
 
-### Running Tests
+### Run tests
 
 ```bash
 uv run pytest tests/ -v
 ```
 
-Tests across 5 files in `tests/` (security, jobs, operations, ytdlp, server). Run `uv run pytest tests/ -v` to see current count.
+11 test files, ~176 tests: security, jobs, operations, ytdlp, server, audio_ops, image_ops, dispatch, progress, db, pipeline.
 
-### Adding New Operations
+### Generate a test video for manual verification
 
-1. Add the core function in `operations.py` with `progress_callback: Callable | None = None` parameter
-2. Forward `progress_callback` to `run_ffmpeg_command()`
-3. Raise `ValueError`/`RuntimeError` on failure (no `sys.exit()`, no `print()` for errors)
-4. Add `-y` flag to ffmpeg commands (prevents interactive prompts in web mode)
-5. Add command definition in `cli.py:setup_argparse()`
-6. Create handler function in `main.py` following pattern: `<operation>_handler(args)`
-7. Add the operation to `_run_ffmpeg_job()` in `server.py`
-8. Write tests
+```bash
+ffmpeg -f lavfi -i testsrc=duration=4:size=640x480:rate=30 -y /tmp/test.mp4
+```
 
-## Dependencies
+## Adding a new operation
 
-- Python >=3.12
-- ffmpeg and ffprobe (must be in PATH)
-- yt-dlp (must be in PATH, for URL downloads)
-- Python packages: see `pyproject.toml` -- key ones are fastapi, uvicorn, bcrypt, python-jose, yt-dlp, orjson, tqdm, structlog
-- Optional: textual (for TUI)
+1. Implement in `video_ops.py`, `image_ops.py`, or `audio_ops.py`. **No `progress_callback` parameter.** Call `run_ffmpeg(command)` for ffmpeg, or `report_progress()` for explicit non-ffmpeg progress.
+2. Raise `FfmpegError`/`ValueError` on failure. Never `exit(1)`.
+3. For ffmpeg commands: include `-y`. Reuse helpers from `video_ops.py` for filter construction.
+4. Add CLI command + inline handler closure in `cli.py:setup_argparse()`.
+5. Export from `vidtools/__init__.py`.
+6. If exposed to the web UI: add a `_dispatch_<op>` function in `server.py` and register in `_OP_DISPATCH`.
+7. If it's a chainable video filter: wire into `_FILTER_BUILDERS` (pipeline.py) + `_PIPELINE_OP_NAMES` + `_make_step_parser` (cli.py).
+8. Write tests. **Mock at `vidtools.<ops_module>.run_ffmpeg`** — patching `vidtools.operations.run_ffmpeg` doesn't work because operations.py is a re-export facade.
+
+## Testing gotchas
+
+- `monkeypatch.setattr("vidtools.video_ops.run_ffmpeg", mock)` — NOT `vidtools.operations.run_ffmpeg`.
+- Thread-local progress sink could leak between tests. The `progress_context()` CM auto-clears. `test_progress.py` uses an autouse `_clear_sink` fixture as a safety net.
+- Image op tests can use real in-memory PIL images (cheap, no ffmpeg required).
+- Audio/video op tests should mock `run_ffmpeg` rather than actually invoking ffmpeg (slow).
+- `db.py` tests use `tmp_path` fixture for isolated SQLite databases.
+
+## FFmpeg practices
+
+- Stream copy (`-c copy`) by default for cut/concat (no quality loss).
+- `--accurate` flag re-encodes for frame-accurate cuts.
+- `-movflags +faststart` automatically added for MP4 outputs (`_add_faststart_if_mp4`).
+- Aspect-preserving resize uses `-2` (even dimensions), not `-1`.
+- GIF conversion uses palette generation for quality.
+- Replaced deprecated `-async 1` with `-af aresample=async=1`.
+- Hardware acceleration: `--hwaccel` flag uses VideoToolbox on macOS (h264_videotoolbox / hevc_videotoolbox).
+- Modern codec presets available: `hevc_quality` (libx265), `av1_quality` (libaom-av1).
+- Always work with the latest ffmpeg documentation and features.
+
+## Versioning
+
+When bumping version, update three places: `vidtools/_version.py`, `pyproject.toml`, `CHANGELOG.md` (semver, no dates, no major bumps without permission).
+
+## Important notes
+
+- All file paths in code use absolute paths.
+- FFmpeg commands run via subprocess with proper error handling (FfmpegError on non-zero exit).
+- Preset modifications are saved to disk immediately; cache invalidates on save.
+- Jobs and file registry persist in SQLite (`data/vidtools.db`) and survive server restarts.
+- Live job progress stays in memory only — persisted only at status transitions to avoid WAL bloat.
+- Output files are auto-cleaned after VIDTOOLS_CLEANUP_HOURS (default 24).
+- Optional dependency: `pillow-heif` for AVIF/HEIF support (not installed by default).
 
 ## Deployment
 
-`deploy/setup.sh` sets up a systemd service on Ubuntu. `deploy/vidtools.service` is a hardened unit file.
-
-## FFmpeg Best Practices Implemented
-
-1. **Stream Copy (-c copy)**: Used by default for cut/concat to avoid quality loss
-2. **Frame-Accurate Cuts**: --accurate flag enables re-encoding for precise cuts
-3. **Fast Start**: Automatically adds `-movflags +faststart` for MP4
-4. **Aspect Ratio Preservation**: Uses `-2` instead of `-1` for even dimensions in resize
-5. **Optimized GIF Creation**: Uses palette generation for better quality
-6. **Codec Auto-Detection**: Convert auto-detects format from file extension
-7. **Overwrite Flag**: All web-mode commands include `-y` to prevent interactive stalls
-
-## Important Notes
-
-- All file paths in the code use absolute paths
-- FFmpeg commands are executed via subprocess with proper error handling
-- Preset modifications are immediately saved to disk
-- Jobs are in-memory only; they don't survive server restarts
-- File registry persists to disk and is pruned on startup
-- Output files are auto-cleaned after VIDTOOLS_CLEANUP_HOURS (default 24)
+`deploy/setup.sh` sets up a systemd service on Ubuntu. `deploy/vidtools.service` is a hardened unit file (NoNewPrivileges, ProtectSystem=strict, etc.).
