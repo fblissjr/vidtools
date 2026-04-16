@@ -6,9 +6,9 @@ Downloads video/audio from URLs via subprocess with progress parsing.
 import re
 import subprocess
 from pathlib import Path
-from typing import Callable
 
 import structlog
+from .progress import report_progress
 
 logger = structlog.get_logger(__name__)
 
@@ -97,16 +97,14 @@ def download(
     url: str,
     output_path: str,
     format_type: str,
-    progress_callback: Callable | None = None,
     max_duration: int | None = DEFAULT_MAX_DURATION,
 ) -> str:
-    """Download video/audio from a URL.
+    """Download video/audio from a URL. Reports progress via thread-local sink.
 
     Args:
         url: URL to download.
         output_path: Output file path (may be modified by yt-dlp for audio extraction).
         format_type: 'mp3', 'wav', or 'mp4'.
-        progress_callback: Optional callback(percent: int, message: str).
         max_duration: Max video duration in seconds.
 
     Returns:
@@ -121,6 +119,7 @@ def download(
     process = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True
     )
+    assert process.stdout is not None
 
     actual_output = output_path
     printed_filepath = None
@@ -141,8 +140,8 @@ def download(
                     printed_filepath = str(candidate)
 
             progress = parse_ytdlp_progress(line)
-            if progress and progress_callback:
-                progress_callback(
+            if progress:
+                report_progress(
                     progress["percent"],
                     f"Downloading... {progress['percent']}%"
                     + (f" ({progress['speed']})" if progress.get("speed") else ""),
@@ -163,8 +162,6 @@ def download(
                 actual_output = str(candidate)
                 break
 
-    if progress_callback:
-        progress_callback(100, "Download complete")
-
+    report_progress(100, "Download complete")
     logger.info("yt-dlp download complete", output=actual_output)
     return actual_output

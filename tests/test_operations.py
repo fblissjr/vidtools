@@ -1,7 +1,5 @@
 """Tests for vidtools.operations module -- error handling and API contracts."""
 
-import json
-
 import pytest
 
 from vidtools.operations import (
@@ -16,7 +14,7 @@ from vidtools.operations import (
 class TestResizeVideoValidation:
     def test_raises_on_no_size_params(self):
         """resize_video must raise ValueError when no sizing param is given."""
-        with pytest.raises(ValueError, match="must specify"):
+        with pytest.raises(ValueError, match="specify"):
             resize_video("input.mp4", "output.mp4")
 
 
@@ -86,9 +84,9 @@ class TestAddAudioCommand:
     @pytest.fixture()
     def capture_ffmpeg(self, monkeypatch):
         captured = []
-        def mock_run(cmd, progress_callback=None):
+        def mock_run(cmd):
             captured.extend(cmd)
-        monkeypatch.setattr("vidtools.operations.run_ffmpeg_command", mock_run)
+        monkeypatch.setattr("vidtools.video_ops.run_ffmpeg", mock_run)
         return captured
 
     def test_replace_mode_command(self, capture_ffmpeg):
@@ -162,68 +160,46 @@ class TestAddAudioCommand:
         assert "-shortest" not in capture_ffmpeg
 
 
-class TestProgressCallbackSignature:
-    """Verify all operations accept progress_callback kwarg without error."""
+class TestNoProgressCallbackParam:
+    """After the thread-local sink refactor, no operation should expose
+    a progress_callback parameter. Progress flows via the ambient sink."""
 
-    def test_resize_accepts_callback(self):
-        """resize_video should accept progress_callback parameter."""
-        import inspect
-        sig = inspect.signature(resize_video)
-        assert "progress_callback" in sig.parameters
+    OPS = [
+        "resize_video", "cut_video", "convert_format", "extract_audio",
+        "crop_video", "rotate_video", "concatenate_videos", "sanitize_video",
+        "create_slideshow", "apply_preset", "add_audio",
+    ]
 
-    def test_cut_accepts_callback(self):
-        from vidtools.operations import cut_video
+    def test_no_progress_callback_in_signatures(self):
         import inspect
-        sig = inspect.signature(cut_video)
-        assert "progress_callback" in sig.parameters
+        from vidtools import operations
+        for name in self.OPS:
+            fn = getattr(operations, name)
+            sig = inspect.signature(fn)
+            assert "progress_callback" not in sig.parameters, (
+                f"{name} still has progress_callback parameter"
+            )
 
-    def test_convert_accepts_callback(self):
-        from vidtools.operations import convert_format
+    def test_image_ops_no_progress_callback(self):
         import inspect
-        sig = inspect.signature(convert_format)
-        assert "progress_callback" in sig.parameters
+        from vidtools import image_ops
+        for name in ["resize_image", "convert_image", "crop_image",
+                     "create_thumbnail", "strip_image_metadata",
+                     "optimize_image", "adjust_image"]:
+            fn = getattr(image_ops, name)
+            sig = inspect.signature(fn)
+            assert "progress_callback" not in sig.parameters, (
+                f"{name} still has progress_callback parameter"
+            )
 
-    def test_extract_audio_accepts_callback(self):
-        from vidtools.operations import extract_audio
+    def test_audio_ops_no_progress_callback(self):
         import inspect
-        sig = inspect.signature(extract_audio)
-        assert "progress_callback" in sig.parameters
-
-    def test_crop_accepts_callback(self):
-        from vidtools.operations import crop_video
-        import inspect
-        sig = inspect.signature(crop_video)
-        assert "progress_callback" in sig.parameters
-
-    def test_rotate_accepts_callback(self):
-        import inspect
-        sig = inspect.signature(rotate_video)
-        assert "progress_callback" in sig.parameters
-
-    def test_concatenate_accepts_callback(self):
-        from vidtools.operations import concatenate_videos
-        import inspect
-        sig = inspect.signature(concatenate_videos)
-        assert "progress_callback" in sig.parameters
-
-    def test_sanitize_accepts_callback(self):
-        from vidtools.operations import sanitize_video
-        import inspect
-        sig = inspect.signature(sanitize_video)
-        assert "progress_callback" in sig.parameters
-
-    def test_slideshow_accepts_callback(self):
-        from vidtools.operations import create_slideshow
-        import inspect
-        sig = inspect.signature(create_slideshow)
-        assert "progress_callback" in sig.parameters
-
-    def test_apply_preset_accepts_callback(self):
-        import inspect
-        sig = inspect.signature(apply_preset)
-        assert "progress_callback" in sig.parameters
-
-    def test_add_audio_accepts_callback(self):
-        import inspect
-        sig = inspect.signature(add_audio)
-        assert "progress_callback" in sig.parameters
+        from vidtools import audio_ops
+        for name in ["convert_audio", "cut_audio", "normalize_audio",
+                     "mix_audio", "fade_audio", "resample_audio",
+                     "remove_silence"]:
+            fn = getattr(audio_ops, name)
+            sig = inspect.signature(fn)
+            assert "progress_callback" not in sig.parameters, (
+                f"{name} still has progress_callback parameter"
+            )

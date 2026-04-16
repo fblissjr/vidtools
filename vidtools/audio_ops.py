@@ -1,0 +1,185 @@
+"""Audio operations using FFmpeg."""
+
+import re
+import subprocess
+from pathlib import Path
+
+from .utils import run_ffmpeg, logger
+from .progress import report_progress
+
+# Map output extension to ffmpeg audio codec
+AUDIO_CODEC_MAP = {
+    "mp3": "libmp3lame",
+    "aac": "aac",
+    "m4a": "aac",
+    "flac": "flac",
+    "ogg": "libvorbis",
+    "opus": "libopus",
+    "wav": "pcm_s16le",
+}
+
+
+def _auto_codec(output_file: str, explicit_codec: str | None = None) -> str:
+    """Determine audio codec from output extension or explicit override."""
+    if explicit_codec:
+        return explicit_codec
+    ext = Path(output_file).suffix.lstrip(".").lower()
+    return AUDIO_CODEC_MAP.get(ext, "aac")
+
+
+def convert_audio(input_file: str, output_file: str, audio_codec: str | None = None,
+                  bitrate: str | None = None, sample_rate: int | None = None):
+    """Convert audio format with codec auto-detection from output extension."""
+    codec = _auto_codec(output_file, audio_codec)
+    command = ["ffmpeg", "-y", "-i", input_file, "-vn", "-c:a", codec]
+    if bitrate:
+        command.extend(["-b:a", bitrate])
+    if sample_rate:
+        command.extend(["-ar", str(sample_rate)])
+    command.append(output_file)
+    run_ffmpeg(command)
+
+
+def cut_audio(input_file: str, output_file: str, start_time: str | None = None,
+              end_time: str | None = None, duration: str | None = None,
+              use_copy: bool = True):
+    """Trim an audio file by time range."""
+    command = ["ffmpeg", "-y"]
+    if start_time:
+        command.extend(["-ss", str(start_time)])
+    command.extend(["-i", input_file])
+    if end_time:
+        command.extend(["-to", str(end_time)])
+    elif duration:
+        command.extend(["-t", str(duration)])
+    command.extend(["-vn"])
+    if use_copy:
+        command.extend(["-c", "copy"])
+    command.append(output_file)
+    run_ffmpeg(command)
+
+
+def normalize_audio(input_file: str, output_file: str, target_loudness: float = -16.0):
+    """Two-pass loudnorm normalization."""
+    # Pass 1: analyze
+    report_progress(10, "Analyzing audio levels...")
+    analyze_cmd = [
+        "ffmpeg", "-y", "-i", input_file, "-vn",
+        "-af", f"loudnorm=I={target_loudness}:print_format=summary",
+        "-f", "null", "-"
+    ]
+    result = subprocess.run(analyze_cmd, capture_output=True, text=True)
+    stderr = result.stderr
+
+    # Parse measured values
+    measured_i = re.search(r'Input Integrated:\s+([-\d.]+)', stderr)
+    measured_tp = re.search(r'Input True Peak:\s+([-\d.]+)', stderr)
+    measured_lra = re.search(r'Input LRA:\s+([-\d.]+)', stderr)
+    measured_thresh = re.search(r'Input Threshold:\s+([-\d.]+)', stderr)
+
+    if measured_i and measured_tp and measured_lra and measured_thresh:
+        # Pass 2: apply with measured values for linear normalization
+        loudnorm_filter = (
+            f"loudnorm=I={target_loudness}:"
+            f"measured_I={measured_i.group(1)}:"
+            f"measured_TP={measured_tp.group(1)}:"
+            f"measured_LRA={measured_lra.group(1)}:"
+            f"measured_thresh={measured_thresh.group(1)}:"
+            f"linear=true"
+        )
+    else:
+        # Fallback to single-pass
+        logger.warning("Could not parse loudnorm analysis, using single-pass normalization")
+        loudnorm_filter = f"loudnorm=I={target_loudness}"
+
+    command = ["ffmpeg", "-y", "-i", input_file, "-vn", "-af", loudnorm_filter, output_file]
+    run_ffmpeg(command)
+
+
+def mix_audio(input_files: list[str], output_file: str,
+              volumes: list[float] | None = None):
+    """Mix multiple audio files together using amix filter."""
+    if len(input_files) < 2:
+        raise ValueError("mix_audio requires at least 2 input files")
+
+    command = ["ffmpeg", "-y"]
+    for f in input_files:
+        command.extend(["-i", f])
+
+    n = len(input_files)
+    if volumes:
+        # Apply volume adjustment per input, then mix
+        vol_parts = []
+        for i, vol in enumerate(volumes):
+            vol_parts.append(f"[{i}:a]volume={vol}[a{i}]")
+        mix_inputs = "".join(f"[a{i}]" for i in range(n))
+        filter_expr = ";".join(vol_parts) + f";{mix_inputs}amix=inputs={n}:normalize=0"
+    else:
+        mix_inputs = "".join(f"[{i}:a]" for i in range(n))
+        filter_expr = f"{mix_inputs}amix=inputs={n}:normalize=0"
+
+    command.extend(["-filter_complex", filter_expr, "-vn", output_file])
+    run_ffmpeg(command)
+
+
+def get_audio_info(input_file: str) -> dict:
+    """Get audio file metadata using ffprobe."""
+    import orjson
+    command = ["ffprobe", "-v", "error", "-show_format", "-show_streams",
+               "-select_streams", "a", "-of", "json", input_file]
+    result = subprocess.run(command, capture_output=True, text=True, check=True)
+    return orjson.loads(result.stdout)
+
+
+def fade_audio(input_file: str, output_file: str,
+               fade_in: float | None = None, fade_out: float | None = None,
+               total_duration: float | None = None):
+    """Apply fade in/out effects to audio."""
+    filters = []
+    if fade_in is not None:
+        filters.append(f"afade=t=in:d={fade_in}")
+    if fade_out is not None:
+        if total_duration is None:
+            raise ValueError("total_duration is required for fade_out")
+        start = total_duration - fade_out
+        filters.append(f"afade=t=out:st={start}:d={fade_out}")
+
+    if not filters:
+        raise ValueError("At least one of fade_in or fade_out must be specified")
+
+    command = ["ffmpeg", "-y", "-i", input_file, "-vn", "-af", ",".join(filters), output_file]
+    run_ffmpeg(command)
+
+
+def resample_audio(input_file: str, output_file: str, sample_rate: int = 44100):
+    """Resample audio to a different sample rate."""
+    command = ["ffmpeg", "-y", "-i", input_file, "-vn", "-ar", str(sample_rate), output_file]
+    run_ffmpeg(command)
+
+
+def detect_silence(input_file: str, threshold: int = -30,
+                   min_duration: float = 0.5) -> list[tuple[float, float]]:
+    """Detect silence ranges in audio. Returns list of (start, end) tuples."""
+    command = [
+        "ffmpeg", "-i", input_file,
+        "-af", f"silencedetect=noise={threshold}dB:d={min_duration}",
+        "-f", "null", "-"
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    stderr = result.stderr
+
+    starts = [float(m.group(1)) for m in re.finditer(r'silence_start:\s*([\d.]+)', stderr)]
+    ends = [float(m.group(1)) for m in re.finditer(r'silence_end:\s*([\d.]+)', stderr)]
+
+    return list(zip(starts, ends[:len(starts)]))
+
+
+def remove_silence(input_file: str, output_file: str,
+                   threshold: int = -30, min_duration: float = 0.5):
+    """Remove silence from audio using silenceremove filter."""
+    command = [
+        "ffmpeg", "-y", "-i", input_file, "-vn",
+        "-af", f"silenceremove=stop_periods=-1:stop_duration={min_duration}:stop_threshold={threshold}dB",
+        output_file,
+    ]
+    run_ffmpeg(command)

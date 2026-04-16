@@ -1,103 +1,57 @@
-"""Tests for vidtools.server module -- file registry persistence."""
+"""Tests for vidtools.server module -- file registry integration."""
 
-import tempfile
-from pathlib import Path
-
-import orjson
 import pytest
+from vidtools.db import Database, FileRegistry, migrate_legacy_registry
+import orjson
 
 
-class TestFileRegistryPersistence:
-    def test_save_and_load_registry(self, tmp_path, monkeypatch):
-        """Registry should survive save/load cycle."""
-        # Set up isolated data dir
-        monkeypatch.setattr("vidtools.server.DATA_DIR", tmp_path)
-        monkeypatch.setattr("vidtools.server.UPLOAD_DIR", tmp_path / "uploads")
-        monkeypatch.setattr("vidtools.server.OUTPUT_DIR", tmp_path / "output")
-        monkeypatch.setattr("vidtools.server.TEMP_DIR", tmp_path / "temp")
-        monkeypatch.setattr("vidtools.server.REGISTRY_FILE", tmp_path / "file_registry.json")
+class TestServerFileRegistryIntegration:
+    """The server now uses FileRegistry from vidtools.db. The unit-level
+    behavior is tested in test_db.py; these tests verify the server-side
+    integration concerns: legacy migration and lifespan setup."""
 
-        from vidtools.server import (
-            _register_file,
-            _load_registry,
-            _save_registry,
-            file_registry,
-            REGISTRY_FILE,
-        )
+    def test_legacy_migration_runs_on_startup(self, tmp_path):
+        # Simulate a pre-existing JSON registry that the server should migrate
+        f = tmp_path / "real.mp4"
+        f.write_bytes(b"fake video")
 
-        # Create dirs
-        (tmp_path / "uploads").mkdir()
-        (tmp_path / "output").mkdir()
-
-        # Create a real file so registry prune doesn't remove it
-        test_file = tmp_path / "uploads" / "test_abc123.mp4"
-        test_file.write_bytes(b"fake video content")
-
-        # Register a file
-        _register_file("abc123", "test.mp4", str(test_file), 18, "upload")
-
-        # Verify it was saved to disk
-        assert (tmp_path / "file_registry.json").exists()
-        saved = orjson.loads((tmp_path / "file_registry.json").read_bytes())
-        assert "abc123" in saved
-        assert saved["abc123"]["filename"] == "test.mp4"
-
-        # Clear in-memory and reload
-        file_registry.clear()
-        assert len(file_registry) == 0
-
-        _load_registry()
-        assert "abc123" in file_registry
-        assert file_registry["abc123"]["filename"] == "test.mp4"
-
-    def test_load_prunes_missing_files(self, tmp_path, monkeypatch):
-        """Loading should remove entries for files that no longer exist."""
-        monkeypatch.setattr("vidtools.server.DATA_DIR", tmp_path)
-        monkeypatch.setattr("vidtools.server.UPLOAD_DIR", tmp_path / "uploads")
-        monkeypatch.setattr("vidtools.server.OUTPUT_DIR", tmp_path / "output")
-        monkeypatch.setattr("vidtools.server.TEMP_DIR", tmp_path / "temp")
-        monkeypatch.setattr("vidtools.server.REGISTRY_FILE", tmp_path / "file_registry.json")
-
-        from vidtools.server import _load_registry, file_registry
-
-        (tmp_path / "uploads").mkdir()
-        (tmp_path / "output").mkdir()
-
-        # Write a registry entry pointing to a nonexistent file
-        (tmp_path / "file_registry.json").write_bytes(orjson.dumps({
-            "gone123": {
-                "filename": "gone.mp4",
-                "path": str(tmp_path / "uploads" / "gone.mp4"),
-                "size": 100,
-                "created_at": 1000.0,
+        legacy = tmp_path / "file_registry.json"
+        legacy.write_bytes(orjson.dumps({
+            "abc123": {
+                "filename": "real.mp4",
+                "path": str(f),
+                "size": 10,
                 "source": "upload",
-            }
+            },
         }))
 
-        file_registry.clear()
-        _load_registry()
-        assert "gone123" not in file_registry
+        db = Database(tmp_path / "vidtools.db")
+        registry = FileRegistry(db)
+        try:
+            migrated = migrate_legacy_registry(registry, legacy)
+            assert migrated == 1
+            assert "abc123" in registry
+            # Legacy file should be renamed
+            assert not legacy.exists()
+            assert legacy.with_suffix(".json.migrated").exists()
+        finally:
+            db.close()
 
-    def test_unregister_removes_and_saves(self, tmp_path, monkeypatch):
-        """_unregister_file should remove from memory and persist."""
-        monkeypatch.setattr("vidtools.server.DATA_DIR", tmp_path)
-        monkeypatch.setattr("vidtools.server.UPLOAD_DIR", tmp_path / "uploads")
-        monkeypatch.setattr("vidtools.server.OUTPUT_DIR", tmp_path / "output")
-        monkeypatch.setattr("vidtools.server.TEMP_DIR", tmp_path / "temp")
-        monkeypatch.setattr("vidtools.server.REGISTRY_FILE", tmp_path / "file_registry.json")
+    def test_database_persists_across_reopens(self, tmp_path):
+        db_path = tmp_path / "vidtools.db"
+        f = tmp_path / "v.mp4"
+        f.write_bytes(b"x")
 
-        from vidtools.server import _register_file, _unregister_file, file_registry
+        db1 = Database(db_path)
+        registry1 = FileRegistry(db1)
+        registry1.add("xyz", "v.mp4", str(f), 1, "upload")
+        db1.close()
 
-        (tmp_path / "uploads").mkdir()
-        test_file = tmp_path / "uploads" / "test_del.mp4"
-        test_file.write_bytes(b"data")
-
-        _register_file("del123", "test_del.mp4", str(test_file), 4, "upload")
-        assert "del123" in file_registry
-
-        _unregister_file("del123")
-        assert "del123" not in file_registry
-
-        # Verify persisted
-        saved = orjson.loads((tmp_path / "file_registry.json").read_bytes())
-        assert "del123" not in saved
+        db2 = Database(db_path)
+        registry2 = FileRegistry(db2)
+        try:
+            assert "xyz" in registry2
+            info = registry2.get("xyz")
+            assert info["filename"] == "v.mp4"
+        finally:
+            db2.close()

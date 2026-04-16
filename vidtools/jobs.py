@@ -61,10 +61,16 @@ class Job:
 
 
 class JobManager:
-    """Manages job lifecycle: creation, tracking, execution, cleanup."""
+    """Manages job lifecycle: creation, tracking, execution, cleanup.
 
-    def __init__(self, max_concurrent: int = 2):
+    Jobs persist to a JobStore at status transitions. Live progress (which
+    fires rapidly during execution) is held in memory only -- it would create
+    excessive WAL bloat to persist every tick.
+    """
+
+    def __init__(self, max_concurrent: int = 2, store=None):
         self.max_concurrent = max_concurrent
+        self.store = store  # vidtools.db.JobStore | None (None for tests)
         self.jobs: dict[str, Job] = {}
         self._semaphore: asyncio.Semaphore | None = None
 
@@ -74,6 +80,15 @@ class JobManager:
             self._semaphore = asyncio.Semaphore(self.max_concurrent)
         return self._semaphore
 
+    def load_from_store(self) -> None:
+        """Rehydrate in-memory jobs from the persistent store. Call at startup."""
+        if self.store is None:
+            return
+        # Mark anything that was running/queued at last shutdown as failed
+        self.store.fail_unfinished("Server restart")
+        for job in self.store.list_all():
+            self.jobs[job.id] = job
+
     def create_job(
         self,
         operation: str,
@@ -81,9 +96,11 @@ class JobManager:
         input_file: str | None = None,
         url: str | None = None,
     ) -> Job:
-        """Create a new job and add it to the store."""
+        """Create a new job and persist it."""
         job = Job(operation=operation, params=params, input_file=input_file, url=url)
         self.jobs[job.id] = job
+        if self.store is not None:
+            self.store.insert(job)
         return job
 
     def get_job(self, job_id: str) -> Job | None:
@@ -100,6 +117,9 @@ class JobManager:
         if job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
             job.status = JobStatus.CANCELLED
             job.completed_at = time.time()
+            if self.store is not None:
+                self.store.update_status(job_id, status=JobStatus.CANCELLED,
+                                         completed_at=job.completed_at)
             return True
         return False
 
@@ -116,12 +136,15 @@ class JobManager:
         ]
         for jid in to_remove:
             del self.jobs[jid]
+        if self.store is not None:
+            self.store.delete_old(now - max_age_seconds, terminal_only=True)
 
     async def run_job(self, job: Job, work_fn: Callable):
         """Run a job with concurrency limiting.
 
-        work_fn should accept (job, progress_callback) and do the actual work.
-        It will be called via asyncio.to_thread for blocking operations.
+        work_fn should accept (job) and do the actual work. It will be called
+        via asyncio.to_thread for blocking operations. Progress is reported
+        via the thread-local progress sink (see vidtools.progress).
         """
         sem = self._get_semaphore()
         async with sem:
@@ -130,15 +153,30 @@ class JobManager:
 
             job.status = JobStatus.RUNNING
             job.started_at = time.time()
+            if self.store is not None:
+                self.store.update_status(job.id, status=JobStatus.RUNNING,
+                                         started_at=job.started_at)
 
             try:
-                await asyncio.to_thread(work_fn, job, job.update_progress)
+                await asyncio.to_thread(work_fn, job)
                 if job.status == JobStatus.CANCELLED:
                     return
                 job.status = JobStatus.COMPLETED
                 job.progress = 100
                 job.completed_at = time.time()
+                if self.store is not None:
+                    self.store.update_status(
+                        job.id, status=JobStatus.COMPLETED,
+                        completed_at=job.completed_at,
+                        progress=100, output_file=job.output_file,
+                    )
             except Exception as e:
                 job.status = JobStatus.FAILED
                 job.error = str(e)
                 job.completed_at = time.time()
+                if self.store is not None:
+                    self.store.update_status(
+                        job.id, status=JobStatus.FAILED,
+                        completed_at=job.completed_at,
+                        error=job.error,
+                    )

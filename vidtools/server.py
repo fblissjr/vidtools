@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import operations
 from ._version import __version__
+from .db import Database, FileRegistry, JobStore, migrate_legacy_registry
 from .jobs import Job, JobManager, JobStatus
 from .security import (
     RateLimiter,
@@ -52,80 +53,34 @@ OUTPUT_DIR = DATA_DIR / "output"
 TEMP_DIR = DATA_DIR / "temp"
 CONFIG_DIR = Path(os.environ.get("VIDTOOLS_CONFIG_DIR", os.path.expanduser("~/.config/vidtools")))
 CONFIG_FILE = CONFIG_DIR / "config.json"
-REGISTRY_FILE = DATA_DIR / "file_registry.json"
+DB_PATH = DATA_DIR / "vidtools.db"
+LEGACY_REGISTRY_FILE = DATA_DIR / "file_registry.json"  # for migration only
 
 MAX_UPLOAD_SIZE = int(os.environ.get("VIDTOOLS_MAX_UPLOAD_MB", "2048")) * 1024 * 1024
 FILE_CLEANUP_HOURS = int(os.environ.get("VIDTOOLS_CLEANUP_HOURS", "24"))
 
 # --- Globals ---
+# Initialized in lifespan startup (need DATA_DIR to exist first)
 
-job_manager = JobManager(max_concurrent=2)
+database: Database | None = None
+file_registry: FileRegistry = None  # type: ignore[assignment]
+job_store: JobStore | None = None
+job_manager: JobManager = None  # type: ignore[assignment]
 rate_limiter = RateLimiter(max_requests=60, window_seconds=60)
 login_limiter = RateLimiter(max_requests=5, window_seconds=300)
 ws_clients: list[WebSocket] = []
 
-# Track file metadata: file_id -> {filename, path, size, created_at, source}
-file_registry: dict[str, dict] = {}
 
-
-# --- File registry persistence ---
-
-def _save_registry():
-    """Persist file registry to disk."""
-    try:
-        REGISTRY_FILE.write_bytes(orjson.dumps(file_registry, option=orjson.OPT_INDENT_2))
-    except Exception:
-        logger.exception("Failed to save file registry")
-
-
-def _load_registry():
-    """Load file registry from disk. Prunes entries for files that no longer exist."""
-    if REGISTRY_FILE.exists():
-        try:
-            loaded = orjson.loads(REGISTRY_FILE.read_bytes())
-            # Prune entries whose files are gone, mutate in-place to keep references valid
-            pruned = {
-                fid: info for fid, info in loaded.items()
-                if Path(info["path"]).exists()
-            }
-            file_registry.clear()
-            file_registry.update(pruned)
-            return
-        except Exception:
-            logger.exception("Failed to load file registry, scanning directories")
-
-    # Fallback: scan directories
+def _scan_directories_into_registry():
+    """Scan upload/output directories and register any unknown files.
+    Used when starting fresh (no DB) or after a manual file drop."""
     for directory in (UPLOAD_DIR, OUTPUT_DIR):
         if directory.exists():
             for f in directory.iterdir():
                 if f.is_file():
                     fid = uuid.uuid4().hex[:12]
-                    file_registry[fid] = {
-                        "filename": f.name,
-                        "path": str(f),
-                        "size": f.stat().st_size,
-                        "created_at": f.stat().st_mtime,
-                        "source": "upload" if directory == UPLOAD_DIR else "output",
-                    }
-    _save_registry()
-
-
-def _register_file(file_id: str, filename: str, path: str, size: int, source: str):
-    """Register a file and persist to disk."""
-    file_registry[file_id] = {
-        "filename": filename,
-        "path": path,
-        "size": size,
-        "created_at": time.time(),
-        "source": source,
-    }
-    _save_registry()
-
-
-def _unregister_file(file_id: str):
-    """Remove a file from registry and persist."""
-    file_registry.pop(file_id, None)
-    _save_registry()
+                    source = "upload" if directory == UPLOAD_DIR else "output"
+                    file_registry.add(fid, f.name, str(f), f.stat().st_size, source)
 
 
 # --- Config helpers ---
@@ -180,7 +135,6 @@ async def _cleanup_loop():
         await asyncio.sleep(3600)  # Run every hour
         try:
             cutoff = time.time() - (FILE_CLEANUP_HOURS * 3600)
-            removed_any = False
             for directory in (UPLOAD_DIR, OUTPUT_DIR, TEMP_DIR):
                 if not directory.exists():
                     continue
@@ -188,20 +142,8 @@ async def _cleanup_loop():
                     if f.is_file() and f.stat().st_mtime < cutoff:
                         f.unlink()
                         logger.info("Cleaned up old file", path=str(f))
-                        removed_any = True
 
-            # Clean up file registry entries for deleted files
-            to_remove = [
-                fid for fid, info in file_registry.items()
-                if not Path(info["path"]).exists()
-            ]
-            for fid in to_remove:
-                del file_registry[fid]
-                removed_any = True
-
-            if removed_any:
-                _save_registry()
-
+            file_registry.prune_missing()
             job_manager.cleanup_old_jobs(max_age_seconds=3600)
         except Exception:
             logger.exception("Error in cleanup loop")
@@ -210,20 +152,39 @@ async def _cleanup_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
+    global database, file_registry, job_store, job_manager
+
     _ensure_dirs()
 
     # Set JWT secret from config
     from . import security
     security.SECRET_KEY = _get_secret_key()
 
-    # Load persisted file registry (or scan directories as fallback)
-    _load_registry()
+    # Initialize SQLite-backed state
+    database = Database(DB_PATH)
+    file_registry = FileRegistry(database)
+    job_store = JobStore(database)
+    job_manager = JobManager(max_concurrent=2, store=job_store)
+
+    # Migrate legacy JSON registry on first run
+    migrate_legacy_registry(file_registry, LEGACY_REGISTRY_FILE)
+
+    # Prune entries whose underlying files have disappeared, then scan for
+    # any unknown files (e.g. dropped manually into the data directories)
+    file_registry.prune_missing()
+    if not file_registry.list_all():
+        _scan_directories_into_registry()
+
+    # Rehydrate jobs from disk and mark any still-running jobs as failed
+    # (server crashed mid-execution last time)
+    job_manager.load_from_store()
 
     cleanup_task = asyncio.create_task(_cleanup_loop())
     logger.info("Vidtools server started", data_dir=str(DATA_DIR), version=__version__)
     yield
     cleanup_task.cancel()
-    _save_registry()
+    if database is not None:
+        database.close()
     logger.info("Vidtools server stopped")
 
 
@@ -375,7 +336,7 @@ async def upload_file(request: Request):
                 raise HTTPException(status_code=413, detail="File too large")
             f.write(chunk)
 
-    _register_file(file_id, safe_name, str(dest_path), total_size, "upload")
+    file_registry.add(file_id, safe_name, str(dest_path), total_size, "upload")
 
     return {"id": file_id, "filename": safe_name, "size": total_size}
 
@@ -384,16 +345,16 @@ async def upload_file(request: Request):
 async def list_files():
     """List all available files."""
     files = []
-    for fid, info in file_registry.items():
+    for info in file_registry.list_all():
         if Path(info["path"]).exists():
             files.append({
-                "id": fid,
+                "id": info["id"],
                 "filename": info["filename"],
                 "size": info["size"],
                 "created_at": info["created_at"],
                 "source": info["source"],
             })
-    return {"files": sorted(files, key=lambda x: x["created_at"], reverse=True)}
+    return {"files": files}  # already sorted by created_at DESC
 
 
 @app.get("/api/files/{file_id}/download", dependencies=[Depends(require_auth)])
@@ -419,126 +380,121 @@ async def delete_file(file_id: str):
     path = Path(info["path"])
     if path.exists():
         path.unlink()
-    _unregister_file(file_id)
+    file_registry.delete(file_id)
     return {"ok": True}
 
 
 # --- Job endpoints ---
 
-def _run_ffmpeg_job(job: Job, progress_callback):
-    """Execute an FFmpeg operation for a job."""
+# --- Operation dispatch registry ---
+
+def _dispatch_resize(input_path, output_path, params, **_):
+    operations.resize_video(input_path, output_path, percentage=params.get("percentage"),
+                            width=params.get("width"), height=params.get("height"),
+                            algorithm=params.get("algorithm", "lanczos"))
+    return output_path
+
+def _dispatch_convert(input_path, output_path, params, **_):
+    out_ext = params.get("format", Path(input_path).suffix.lstrip("."))
+    operations.convert_format(input_path, output_path, format_type=out_ext,
+                              video_codec=params.get("video_codec"), audio_codec=params.get("audio_codec"),
+                              video_bitrate=params.get("video_bitrate"), audio_bitrate=params.get("audio_bitrate"),
+                              quality_scale=params.get("crf"), preset=params.get("preset"),
+                              use_copy=params.get("copy", False))
+    return output_path
+
+def _dispatch_cut(input_path, output_path, params, **_):
+    operations.cut_video(input_path, output_path, start_time=params.get("start"),
+                         end_time=params.get("end"), duration=params.get("duration"),
+                         use_copy=params.get("copy", True))
+    return output_path
+
+def _dispatch_extract_audio(input_path, output_path, params, **ctx):
+    out_ext = params.get("format", "mp3")
+    input_name = Path(input_path).stem
+    safe_out = sanitize_filename(f"{input_name}.{out_ext}")
+    output_path = str(OUTPUT_DIR / f"{ctx['output_id']}_{safe_out}")
+    operations.extract_audio(input_path, output_path,
+                             audio_format=params.get("audio_codec", "copy"))
+    return output_path
+
+def _dispatch_crop(input_path, output_path, params, **_):
+    operations.crop_video(input_path, output_path, width=params["width"], height=params["height"],
+                          x=params.get("x", 0), y=params.get("y", 0))
+    return output_path
+
+def _dispatch_rotate(input_path, output_path, params, **_):
+    operations.rotate_video(input_path, output_path,
+                            rotation=str(params.get("rotation", "90")))
+    return output_path
+
+def _dispatch_concat(input_path, output_path, params, **_):
+    input_ids = params.get("input_file_ids", [])
+    input_paths = []
+    for fid in input_ids:
+        fi = file_registry.get(fid)
+        if fi is None:
+            raise RuntimeError(f"Input file not found: {fid}")
+        input_paths.append(fi["path"])
+    input_paths.insert(0, input_path)
+    operations.concatenate_videos(input_paths, output_path,
+                                  use_copy=params.get("copy", True))
+    return output_path
+
+def _dispatch_add_audio(input_path, output_path, params, **_):
+    audio_info = file_registry.get(params.get("audio_file_id", ""))
+    if audio_info is None:
+        raise RuntimeError("Audio file not found")
+    operations.add_audio(input_path, audio_info["path"], output_path,
+                         mode=params.get("mode", "replace"), volume=params.get("volume", 1.0))
+    return output_path
+
+def _dispatch_preset(input_path, output_path, params, **_):
+    operations.apply_preset(input_path, output_path, params.get("preset_name", ""))
+    return output_path
+
+_OP_DISPATCH = {
+    "resize": _dispatch_resize,
+    "convert": _dispatch_convert,
+    "cut": _dispatch_cut,
+    "extract-audio": _dispatch_extract_audio,
+    "crop": _dispatch_crop,
+    "rotate": _dispatch_rotate,
+    "concat": _dispatch_concat,
+    "add-audio": _dispatch_add_audio,
+    "preset": _dispatch_preset,
+}
+
+
+def _run_processing_job(job: Job):
+    """Execute a processing operation for a job. Progress flows via the
+    thread-local progress sink set by _run_and_broadcast."""
     input_info = file_registry.get(job.input_file)
     if input_info is None:
         raise RuntimeError(f"Input file not found: {job.input_file}")
     input_path = input_info["path"]
 
-    op = job.operation
     params = job.params
-
-    # Determine output filename
     input_name = Path(input_path).stem
     out_ext = params.get("format", Path(input_path).suffix.lstrip("."))
-    out_name = f"{input_name}_{op}.{out_ext}"
-    safe_out = sanitize_filename(out_name)
+    safe_out = sanitize_filename(f"{input_name}_{job.operation}.{out_ext}")
     output_id = uuid.uuid4().hex[:12]
     output_path = str(OUTPUT_DIR / f"{output_id}_{safe_out}")
 
-    # Map operation to function, threading progress_callback through
-    if op == "resize":
-        operations.resize_video(
-            input_path, output_path,
-            percentage=params.get("percentage"),
-            width=params.get("width"),
-            height=params.get("height"),
-            algorithm=params.get("algorithm", "lanczos"),
-            progress_callback=progress_callback,
-        )
-    elif op == "convert":
-        operations.convert_format(
-            input_path, output_path,
-            format_type=out_ext,
-            video_codec=params.get("video_codec"),
-            audio_codec=params.get("audio_codec"),
-            video_bitrate=params.get("video_bitrate"),
-            audio_bitrate=params.get("audio_bitrate"),
-            quality_scale=params.get("crf"),
-            preset=params.get("preset"),
-            use_copy=params.get("copy", False),
-            progress_callback=progress_callback,
-        )
-    elif op == "cut":
-        operations.cut_video(
-            input_path, output_path,
-            start_time=params.get("start"),
-            end_time=params.get("end"),
-            duration=params.get("duration"),
-            use_copy=params.get("copy", True),
-            progress_callback=progress_callback,
-        )
-    elif op == "extract-audio":
-        out_ext = params.get("format", "mp3")
-        safe_out = sanitize_filename(f"{input_name}.{out_ext}")
-        output_path = str(OUTPUT_DIR / f"{output_id}_{safe_out}")
-        operations.extract_audio(
-            input_path, output_path,
-            audio_format=params.get("audio_codec", "copy"),
-            progress_callback=progress_callback,
-        )
-    elif op == "crop":
-        operations.crop_video(
-            input_path, output_path,
-            width=params["width"], height=params["height"],
-            x=params.get("x", 0), y=params.get("y", 0),
-            progress_callback=progress_callback,
-        )
-    elif op == "rotate":
-        operations.rotate_video(
-            input_path, output_path,
-            rotation=str(params.get("rotation", "90")),
-            progress_callback=progress_callback,
-        )
-    elif op == "concat":
-        input_ids = params.get("input_file_ids", [])
-        input_paths = []
-        for fid in input_ids:
-            fi = file_registry.get(fid)
-            if fi is None:
-                raise RuntimeError(f"Input file not found: {fid}")
-            input_paths.append(fi["path"])
-        input_paths.insert(0, input_path)
-        operations.concatenate_videos(
-            input_paths, output_path,
-            use_copy=params.get("copy", True),
-            progress_callback=progress_callback,
-        )
-    elif op == "add-audio":
-        audio_info = file_registry.get(params.get("audio_file_id", ""))
-        if audio_info is None:
-            raise RuntimeError("Audio file not found")
-        audio_path = audio_info["path"]
-        operations.add_audio(
-            input_path, audio_path, output_path,
-            mode=params.get("mode", "replace"),
-            volume=params.get("volume", 1.0),
-            progress_callback=progress_callback,
-        )
-    elif op == "preset":
-        operations.apply_preset(
-            input_path, output_path,
-            params.get("preset_name", ""),
-            progress_callback=progress_callback,
-        )
-    else:
-        raise RuntimeError(f"Unknown operation: {op}")
+    handler = _OP_DISPATCH.get(job.operation)
+    if handler is None:
+        raise RuntimeError(f"Unknown operation: {job.operation}")
 
-    # Register output file
+    output_path = handler(input_path, output_path, params, output_id=output_id)
+
     out_path_obj = Path(output_path)
     if out_path_obj.exists():
-        _register_file(output_id, safe_out, output_path, out_path_obj.stat().st_size, "output")
+        final_name = Path(output_path).name
+        file_registry.add(output_id, final_name, output_path, out_path_obj.stat().st_size, "output")
         job.output_file = output_id
 
 
-def _run_ytdlp_job(job: Job, progress_callback):
+def _run_ytdlp_job(job: Job):
     """Execute a yt-dlp download for a job."""
     url = job.url
     params = job.params
@@ -557,7 +513,6 @@ def _run_ytdlp_job(job: Job, progress_callback):
         url=url,
         output_path=output_path,
         format_type=format_type,
-        progress_callback=progress_callback,
     )
 
     # Find the actual output file -- yt-dlp may change the extension
@@ -573,7 +528,7 @@ def _run_ytdlp_job(job: Job, progress_callback):
                 break
 
     if actual.exists():
-        _register_file(output_id, actual.name, str(actual), actual.stat().st_size, "output")
+        file_registry.add(output_id, actual.name, str(actual), actual.stat().st_size, "output")
         job.output_file = output_id
     else:
         raise RuntimeError("Download completed but output file not found")
@@ -600,7 +555,7 @@ async def create_job(request: Request):
         if not input_file_id or input_file_id not in file_registry:
             raise HTTPException(status_code=400, detail="Invalid input_file_id")
         job = job_manager.create_job(op, params, input_file=input_file_id)
-        work_fn = _run_ffmpeg_job
+        work_fn = _run_processing_job
 
     # Start job in background
     asyncio.create_task(_run_and_broadcast(job, work_fn))
@@ -609,20 +564,29 @@ async def create_job(request: Request):
 
 
 async def _run_and_broadcast(job: Job, work_fn):
-    """Run a job and broadcast progress to WebSocket clients."""
-    # Get reference to the running event loop for thread-safe scheduling
-    loop = asyncio.get_running_loop()
-    original_update = job.update_progress
+    """Run a job and broadcast progress to WebSocket clients.
 
-    def _progress_with_broadcast(percent, message=""):
-        original_update(percent, message)
-        # Schedule broadcast from the worker thread back to the event loop
+    Sets a thread-local progress sink that updates the job and schedules
+    a WebSocket broadcast back on the event loop.
+    """
+    from .progress import set_progress_sink
+    loop = asyncio.get_running_loop()
+
+    def sink(percent, message=""):
+        job.update_progress(percent, message)
         loop.call_soon_threadsafe(
             lambda: loop.create_task(_broadcast_job_update(job))
         )
 
-    job.update_progress = _progress_with_broadcast
-    await job_manager.run_job(job, work_fn)
+    # Wrap work_fn to install the sink in the worker thread
+    def threaded_work(j):
+        set_progress_sink(sink)
+        try:
+            work_fn(j)
+        finally:
+            set_progress_sink(None)
+
+    await job_manager.run_job(job, threaded_work)
     await _broadcast_job_update(job)
 
 

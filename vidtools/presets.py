@@ -63,6 +63,24 @@ DEFAULT_PRESETS = {
         "abitrate": "128k",
         "description": "WebM for social sharing."
     },
+    "hevc_quality": {
+        "format": "mp4",
+        "vcodec": "libx265",
+        "acodec": "aac",
+        "quality": "28",
+        "vbitrate": None,
+        "abitrate": "128k",
+        "description": "HEVC/H.265 encoding (smaller files, slower encoding)."
+    },
+    "av1_quality": {
+        "format": "mp4",
+        "vcodec": "libaom-av1",
+        "acodec": "libopus",
+        "quality": "30",
+        "vbitrate": None,
+        "abitrate": "128k",
+        "description": "AV1 encoding (best compression, very slow encoding)."
+    },
 }
 
 def load_presets() -> Dict[str, Dict[str, Any]]:
@@ -93,14 +111,26 @@ def save_presets(presets: Dict[str, Dict[str, Any]]):
 
         with open(PRESET_FILE, "wb") as f:
             f.write(orjson.dumps(presets, option=orjson.OPT_INDENT_2))
-        logger.info("Presets saved to file", file=PRESET_FILE, preset_count=len(presets)) # Logging preset save
+        logger.info("Presets saved to file", file=PRESET_FILE, preset_count=len(presets))
+        global _presets_cache
+        _presets_cache = None  # Invalidate cache after saving
     except Exception as e:
-        logger.error("Error saving presets to file", file=PRESET_FILE, error=str(e), exc_info=True) # Logging save error
+        logger.error("Error saving presets to file", file=PRESET_FILE, error=str(e), exc_info=True)
+_presets_cache: Dict[str, Dict[str, Any]] | None = None
+_presets_mtime: float = 0.0
 
-# ... (rest of presets.py - no changes needed)
+
 def get_presets() -> Dict[str, Dict[str, Any]]:
-    """Returns the currently loaded presets."""
-    return load_presets() # Presets are loaded every time they are needed to reflect file changes. Consider caching if performance becomes an issue.
+    """Returns presets, reloading from disk only when the file has changed."""
+    global _presets_cache, _presets_mtime
+    try:
+        current_mtime = os.path.getmtime(PRESET_FILE)
+    except OSError:
+        current_mtime = 0.0
+    if _presets_cache is None or current_mtime != _presets_mtime:
+        _presets_cache = load_presets()
+        _presets_mtime = current_mtime
+    return _presets_cache
 
 def save_preset_command(preset_name: str, preset_data: Dict[str, Any]) -> bool:
     """Saves a preset. Handles overwriting and updates JSON file."""
