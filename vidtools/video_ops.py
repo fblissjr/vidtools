@@ -70,6 +70,17 @@ def _escape_subtitle_path(path: str) -> str:
     return path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
 
+def _apply_encode_options(command: list, video_codec: str | None, audio_codec: str | None,
+                          crf: int | None, hwaccel: bool):
+    """Append video/audio encoder + quality flags. Handles hwaccel and crf=0 (lossless)."""
+    encoder = _get_video_encoder(video_codec or DEFAULT_VIDEO_CODEC, hwaccel)
+    command.extend(["-c:v", encoder, "-c:a", audio_codec or DEFAULT_AUDIO_CODEC])
+    if hwaccel:
+        command.extend(["-q:v", str(crf if crf is not None else 50)])
+    elif crf is not None:
+        command.extend(["-crf", str(crf)])
+
+
 # --- Core FFmpeg Functions ---
 
 
@@ -91,13 +102,7 @@ def cut_video(input_file, output_file, start_time=None, end_time=None, duration=
     if use_copy:
         command.extend(["-c", "copy", "-avoid_negative_ts", "make_zero"])
     else:
-        encoder = _get_video_encoder(video_codec or DEFAULT_VIDEO_CODEC, hwaccel)
-        command.extend(["-c:v", encoder])
-        command.extend(["-c:a", audio_codec or DEFAULT_AUDIO_CODEC])
-        if crf and not hwaccel:
-            command.extend(["-crf", str(crf)])
-        elif hwaccel:
-            command.extend(["-q:v", str(crf or 50)])
+        _apply_encode_options(command, video_codec, audio_codec, crf, hwaccel)
     if fix_sync:
         command.extend(["-af", "aresample=async=1"])
     _add_faststart_if_mp4(command, output_file)
@@ -294,6 +299,70 @@ def sanitize_video(*, input_file: str, output_file: str, limit: int = 24, noise:
         cmd.append("-an")
     cmd.append(output_file)
     run_ffmpeg(cmd)
+
+
+def _stream_duration(stream: dict, format_info: dict) -> float | None:
+    """Resolve a stream's duration in seconds, falling back to format.duration.
+    Returns None if neither is available or parseable."""
+    for source in (stream.get("duration"), format_info.get("duration")):
+        if source in (None, "N/A", ""):
+            continue
+        try:
+            return float(source)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def trim_to_audio(input_file: str, output_file: str, buffer: float = 0.25,
+                  accurate: bool = False, video_codec: str | None = None,
+                  audio_codec: str | None = None, crf: int | None = None,
+                  hwaccel: bool = False):
+    """Trim video so its duration matches the audio track plus a small buffer.
+
+    For videos whose video track outlasts the audio (e.g. avatar/TTS-generated
+    clips with trailing silence). Probes each stream's duration via ffprobe and
+    applies `-t (audio_duration + buffer)` to the output.
+
+    Stream-copies by default (fast, lossless, keyframe-imprecise). Pass
+    `accurate=True` to re-encode for frame-accurate trimming. The buffer
+    avoids an abrupt cut at the exact audio end; default 0.25s.
+
+    If the audio is already longer than the video (or `audio + buffer >= video`),
+    the file is remuxed without trimming.
+    """
+    if buffer < 0:
+        raise ValueError(f"buffer must be >= 0, got {buffer}")
+
+    info = get_video_info(input_file)
+    streams = info.get("streams", [])
+    format_info = info.get("format", {})
+
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    if audio is None:
+        raise ValueError(f"Input has no audio stream: {input_file}")
+    if video is None:
+        raise ValueError(f"Input has no video stream: {input_file}")
+
+    audio_dur = _stream_duration(audio, format_info)
+    video_dur = _stream_duration(video, format_info)
+
+    command = ["ffmpeg", "-y", "-i", input_file]
+
+    if audio_dur is not None and video_dur is not None:
+        target = audio_dur + buffer
+        if target < video_dur:
+            _add_time_range_args(command, duration=f"{target:.3f}")
+
+    if accurate:
+        _apply_encode_options(command, video_codec, audio_codec, crf, hwaccel)
+    else:
+        command.extend(["-c", "copy", "-avoid_negative_ts", "make_zero"])
+
+    _add_faststart_if_mp4(command, output_file)
+    command.append(output_file)
+    run_ffmpeg(command)
 
 
 def _parse_crop_value(value_str: str, dimension: int) -> int:

@@ -22,6 +22,7 @@ from .video_ops import (
     create_slideshow,
     add_audio,
     create_srt_from_transcript,
+    trim_to_audio,
 )
 
 from .image_ops import (
@@ -45,6 +46,7 @@ from .audio_ops import (
     resample_audio,
     detect_silence,
     remove_silence,
+    clean_audio,
 )
 
 # Import preset management functions
@@ -63,13 +65,14 @@ __all__ = [
     "extract_frames", "concatenate_videos", "crop_video", "rotate_video",
     "add_subtitles", "get_video_info", "sanitize_video", "apply_preset",
     "create_slideshow", "add_audio", "create_srt_from_transcript",
+    "trim_to_audio",
     # Image
     "resize_image", "convert_image", "crop_image", "create_thumbnail",
     "strip_image_metadata", "optimize_image", "adjust_image", "get_image_info",
     # Audio
     "convert_audio", "cut_audio", "normalize_audio", "mix_audio",
     "get_audio_info", "fade_audio", "resample_audio",
-    "detect_silence", "remove_silence",
+    "detect_silence", "remove_silence", "clean_audio",
     # Presets
     "get_presets", "save_preset_command", "delete_preset",
     "edit_preset_command", "list_presets",

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.0
+
+### Added
+- **`trim-to-audio`**: trim a video so its duration matches the audio track plus a configurable buffer. For clips whose video track outlasts the audio (e.g. avatar/TTS-generated videos with trailing silent frames). Probes each stream's duration via ffprobe and applies `-t (audio_duration + buffer)`. Buffer defaults to 0.25s.
+- Stream-copies by default (fast, lossless, keyframe-imprecise). `--accurate` re-encodes for frame-accurate trimming with optional `--crf`/`--video-codec`/`--audio-codec`/`--hwaccel`.
+- No-op when the audio is already at least as long as the video (file is still remuxed to the output path so callers get a consistent artifact).
+- Wired into `_OP_DISPATCH` so the web UI / JobManager can run it as a regular job.
+- Not added to the pipeline (requires a probe pass; same constraint as `sanitize` without `--manual-crop`).
+
+- **`audio-clean`**: single-pass vocal cleanup chain. Defaults to the canonical recipe `highpass=80 -> afftdn=nf=-25 -> acompressor(threshold=-15dB,ratio=3,attack=5,release=50) -> loudnorm(I=-14,TP=-1.0,LRA=11)`. Output codec auto-detected from extension; mp3 defaults to libmp3lame VBR `-q:a 2`.
+- Each stage is independently skippable via `--no-highpass`, `--no-denoise`, `--no-compress`, `--no-loudnorm`. All parameters individually tunable from CLI; full param surface in the Python API (`vidtools.audio_ops.clean_audio`).
+- Wired into `_OP_DISPATCH` for web/job execution.
+
+- **`audio-separate`** (optional extra): audio source separation via `audio-separator`. Mel-band roformer, BS-roformer, Demucs, MDX-Net, VR. CoreML accelerated on Apple silicon via ONNXRuntime. Auto-downloads models on first use. `audio-separate --list` shows the registry. Output dir produces one file per stem.
+- Optional extra: install with `uv sync --extra separation` (pulls in torch + onnxruntime + librosa). Core install stays lean.
+- `vidtools/separation.py` defines a `SeparationBackend` Protocol; the current `AudioSeparatorBackend` is backend-swappable so a future MLX-native implementation can replace the inference engine without breaking the CLI surface.
+- Wired into `_OP_DISPATCH` as `audio-separate`.
+
 ## 0.8.1
 
 ### Changed (sanitize is now actually sanitizing)

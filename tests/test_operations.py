@@ -9,6 +9,7 @@ from vidtools.operations import (
     get_video_info,
     add_audio,
     sanitize_video,
+    trim_to_audio,
 )
 
 
@@ -236,6 +237,133 @@ class TestSanitizeVideoCommand:
         assert "noise=alls=10" in chain
 
 
+class TestTrimToAudio:
+    """Test trim_to_audio command construction. The op probes durations via
+    get_video_info, so that's mocked alongside run_ffmpeg."""
+
+    @pytest.fixture()
+    def capture(self, monkeypatch):
+        captured = []
+        def mock_run(cmd):
+            captured.extend(cmd)
+        monkeypatch.setattr("vidtools.video_ops.run_ffmpeg", mock_run)
+        return captured
+
+    def _mock_probe(self, monkeypatch, video_dur, audio_dur):
+        info = {
+            "streams": [
+                {"codec_type": "video", "duration": str(video_dur)},
+                {"codec_type": "audio", "duration": str(audio_dur)},
+            ],
+            "format": {"duration": str(max(video_dur, audio_dur))},
+        }
+        monkeypatch.setattr("vidtools.video_ops.get_video_info", lambda _: info)
+
+    def test_trims_when_audio_shorter(self, capture, monkeypatch):
+        """Video=10s, audio=8s, buffer=0.25 -> -t 8.25"""
+        self._mock_probe(monkeypatch, 10.0, 8.0)
+        trim_to_audio("in.mp4", "out.mp4", buffer=0.25)
+        assert "-t" in capture
+        t_val = capture[capture.index("-t") + 1]
+        assert abs(float(t_val) - 8.25) < 0.001
+
+    def test_default_buffer_is_sub_second(self, monkeypatch):
+        """Default buffer must be < 1s per the design goal."""
+        import inspect
+        sig = inspect.signature(trim_to_audio)
+        assert sig.parameters["buffer"].default < 1.0
+        assert sig.parameters["buffer"].default >= 0.0
+
+    def test_no_op_when_audio_longer(self, capture, monkeypatch, caplog):
+        """Audio already >= video: no -t flag, just remux/passthrough."""
+        self._mock_probe(monkeypatch, 5.0, 8.0)
+        trim_to_audio("in.mp4", "out.mp4")
+        assert "-t" not in capture
+
+    def test_no_op_when_audio_equals_video(self, capture, monkeypatch):
+        """audio_dur + buffer > video_dur should also skip trim."""
+        self._mock_probe(monkeypatch, 10.0, 10.0)
+        trim_to_audio("in.mp4", "out.mp4", buffer=0.25)
+        assert "-t" not in capture
+
+    def test_uses_stream_copy_by_default(self, capture, monkeypatch):
+        self._mock_probe(monkeypatch, 10.0, 8.0)
+        trim_to_audio("in.mp4", "out.mp4")
+        c_idx = capture.index("-c")
+        assert capture[c_idx + 1] == "copy"
+
+    def test_accurate_mode_reencodes(self, capture, monkeypatch):
+        """--accurate switches to re-encode so the trim is frame-accurate."""
+        self._mock_probe(monkeypatch, 10.0, 8.0)
+        trim_to_audio("in.mp4", "out.mp4", accurate=True)
+        assert "-c:v" in capture
+        cv_idx = capture.index("-c:v")
+        assert capture[cv_idx + 1] != "copy"
+
+    def test_crf_zero_is_honored(self, capture, monkeypatch):
+        """crf=0 is valid (lossless H.264). Must not be treated as falsy/unset."""
+        self._mock_probe(monkeypatch, 10.0, 8.0)
+        trim_to_audio("in.mp4", "out.mp4", accurate=True, crf=0)
+        assert "-crf" in capture
+        assert capture[capture.index("-crf") + 1] == "0"
+
+    def test_custom_buffer(self, capture, monkeypatch):
+        self._mock_probe(monkeypatch, 10.0, 7.0)
+        trim_to_audio("in.mp4", "out.mp4", buffer=0.5)
+        t_val = capture[capture.index("-t") + 1]
+        assert abs(float(t_val) - 7.5) < 0.001
+
+    def test_zero_buffer_allowed(self, capture, monkeypatch):
+        self._mock_probe(monkeypatch, 10.0, 8.0)
+        trim_to_audio("in.mp4", "out.mp4", buffer=0.0)
+        t_val = capture[capture.index("-t") + 1]
+        assert abs(float(t_val) - 8.0) < 0.001
+
+    def test_negative_buffer_rejected(self, monkeypatch):
+        self._mock_probe(monkeypatch, 10.0, 8.0)
+        with pytest.raises(ValueError, match="buffer"):
+            trim_to_audio("in.mp4", "out.mp4", buffer=-0.1)
+
+    def test_raises_when_no_audio_stream(self, monkeypatch):
+        info = {
+            "streams": [{"codec_type": "video", "duration": "10.0"}],
+            "format": {"duration": "10.0"},
+        }
+        monkeypatch.setattr("vidtools.video_ops.get_video_info", lambda _: info)
+        with pytest.raises(ValueError, match="audio"):
+            trim_to_audio("in.mp4", "out.mp4")
+
+    def test_raises_when_no_video_stream(self, monkeypatch):
+        info = {
+            "streams": [{"codec_type": "audio", "duration": "10.0"}],
+            "format": {"duration": "10.0"},
+        }
+        monkeypatch.setattr("vidtools.video_ops.get_video_info", lambda _: info)
+        with pytest.raises(ValueError, match="video"):
+            trim_to_audio("in.mp4", "out.mp4")
+
+    def test_falls_back_to_format_duration_when_stream_duration_missing(self, capture, monkeypatch):
+        """Some containers don't carry per-stream duration; format.duration is
+        the fallback. If neither audio nor video have stream duration, both
+        resolve to format duration -> no trim."""
+        info = {
+            "streams": [
+                {"codec_type": "video"},
+                {"codec_type": "audio"},
+            ],
+            "format": {"duration": "10.0"},
+        }
+        monkeypatch.setattr("vidtools.video_ops.get_video_info", lambda _: info)
+        trim_to_audio("in.mp4", "out.mp4")
+        assert "-t" not in capture
+
+    def test_mp4_output_gets_faststart(self, capture, monkeypatch):
+        self._mock_probe(monkeypatch, 10.0, 8.0)
+        trim_to_audio("in.mp4", "out.mp4")
+        assert "-movflags" in capture
+        assert "+faststart" in capture
+
+
 class TestNoProgressCallbackParam:
     """After the thread-local sink refactor, no operation should expose
     a progress_callback parameter. Progress flows via the ambient sink."""
@@ -243,7 +371,7 @@ class TestNoProgressCallbackParam:
     OPS = [
         "resize_video", "cut_video", "convert_format", "extract_audio",
         "crop_video", "rotate_video", "concatenate_videos", "sanitize_video",
-        "create_slideshow", "apply_preset", "add_audio",
+        "create_slideshow", "apply_preset", "add_audio", "trim_to_audio",
     ]
 
     def test_no_progress_callback_in_signatures(self):

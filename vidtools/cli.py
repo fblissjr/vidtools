@@ -613,6 +613,48 @@ Examples:
         operations.add_audio(args.input, args.audio, args.output, mode=mode, volume=args.volume)
     add_audio_parser.set_defaults(func=_add_audio)
 
+    # ---------------------------------------------------------------- trim-to-audio
+    trim_audio = subparsers.add_parser(
+        "trim-to-audio",
+        help="Trim video so its duration matches the audio track + a small buffer",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description="""Trim a video whose video track outlasts its audio track.
+
+Probes both streams via ffprobe, applies -t (audio_duration + buffer) so the
+output ends shortly after the audio does. Stream-copies by default; pass
+--accurate to re-encode for frame-accurate trimming.
+
+Examples:
+  # Default 0.25s buffer
+  %(prog)s in.mp4 out.mp4
+
+  # Half-second buffer
+  %(prog)s in.mp4 out.mp4 --buffer 0.5
+
+  # Frame-accurate (re-encodes)
+  %(prog)s in.mp4 out.mp4 --accurate --crf 20"""
+    )
+    trim_audio.add_argument("input", type=lambda x: is_valid_file(trim_audio, x), help="Input video")
+    trim_audio.add_argument("output", help="Output video")
+    trim_audio.add_argument("--buffer", type=float, default=0.25,
+                            help="Seconds of video to keep after audio ends (default: 0.25)")
+    trim_audio.add_argument("--accurate", action="store_true",
+                            help="Frame-accurate trim (re-encodes, slower)")
+    trim_audio.add_argument("--video-codec", "-vcodec",
+                            help="Video codec for re-encoding (with --accurate)")
+    trim_audio.add_argument("--audio-codec", "-acodec",
+                            help="Audio codec for re-encoding (with --accurate)")
+    trim_audio.add_argument("--crf", type=int,
+                            help="CRF quality (0-51) for re-encoding")
+    trim_audio.add_argument("--hwaccel", action="store_true",
+                            help="Use hardware acceleration (macOS VideoToolbox)")
+    def _trim_to_audio(args):
+        operations.trim_to_audio(args.input, args.output, buffer=args.buffer,
+                                 accurate=args.accurate, video_codec=args.video_codec,
+                                 audio_codec=args.audio_codec, crf=args.crf,
+                                 hwaccel=args.hwaccel)
+    trim_audio.set_defaults(func=_trim_to_audio)
+
     srt_parser = subparsers.add_parser(
         "srt-from-transcript",
         help="Convert a timed transcript to a .srt subtitle file",
@@ -766,6 +808,124 @@ Examples:
     def _aud_resample(args):
         audio_ops.resample_audio(args.input, args.output, sample_rate=args.rate)
     aud_resample.set_defaults(func=_aud_resample)
+
+    aud_clean = subparsers.add_parser(
+        "audio-clean",
+        help="Clean up vocal audio (highpass + denoise + compress + loudnorm)",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description="""Single-pass ffmpeg vocal cleanup chain. Tuned for spoken or sung lead.
+
+Stages (each independently skippable):
+  1. highpass -- removes rumble, plosives, AC hum (default 80 Hz)
+  2. afftdn   -- FFT noise reduction, removes hiss (default nf=-25)
+  3. acompressor -- evens out dynamics
+  4. loudnorm -- EBU R128 to -14 LUFS / -1 dBTP / LRA 11 (streaming target)
+
+Examples:
+  # Default chain (matches the canonical vocal-cleanup recipe)
+  %(prog)s in.mp3 out.mp3
+
+  # Deeper voice: drop the high-pass to 60 Hz
+  %(prog)s in.mp3 out.mp3 --highpass 60
+
+  # Hiss remaining? lower the noise floor
+  %(prog)s in.mp3 out.mp3 --denoise -30
+
+  # Sounds robotic / over-denoised? raise the floor or skip
+  %(prog)s in.mp3 out.mp3 --denoise -20
+  %(prog)s in.mp3 out.mp3 --no-denoise
+
+  # Broadcast target instead of streaming
+  %(prog)s in.mp3 out.mp3 --lufs -23 --true-peak -2.0"""
+    )
+    aud_clean.add_argument("input", type=lambda x: is_valid_file(aud_clean, x))
+    aud_clean.add_argument("output")
+    aud_clean.add_argument("--highpass", type=int, default=80,
+                           help="High-pass cutoff in Hz (default: 80). Use 0 to disable.")
+    aud_clean.add_argument("--no-highpass", action="store_true", help="Skip high-pass filter")
+    aud_clean.add_argument("--denoise", type=float, default=-25.0,
+                           help="afftdn noise floor in dB (default: -25)")
+    aud_clean.add_argument("--no-denoise", action="store_true", help="Skip FFT denoise")
+    aud_clean.add_argument("--no-compress", action="store_true", help="Skip compressor")
+    aud_clean.add_argument("--threshold", type=float, default=-15.0,
+                           help="Compressor threshold dB (default: -15)")
+    aud_clean.add_argument("--ratio", type=float, default=3.0,
+                           help="Compressor ratio (default: 3)")
+    aud_clean.add_argument("--attack", type=float, default=5.0,
+                           help="Compressor attack ms (default: 5)")
+    aud_clean.add_argument("--release", type=float, default=50.0,
+                           help="Compressor release ms (default: 50)")
+    aud_clean.add_argument("--no-loudnorm", action="store_true", help="Skip loudness normalization")
+    aud_clean.add_argument("--lufs", type=float, default=-14.0,
+                           help="Target integrated loudness LUFS (default: -14)")
+    aud_clean.add_argument("--true-peak", type=float, default=-1.0,
+                           help="True peak ceiling dBTP (default: -1.0)")
+    aud_clean.add_argument("--lra", type=float, default=11.0,
+                           help="Loudness range target (default: 11)")
+    aud_clean.add_argument("--codec", dest="audio_codec",
+                           help="Audio codec (auto-detected from extension)")
+    aud_clean.add_argument("--bitrate", help="Bitrate (e.g. 320k); overrides default VBR for mp3")
+    def _aud_clean(args):
+        highpass = None if args.no_highpass or args.highpass == 0 else args.highpass
+        denoise = None if args.no_denoise else args.denoise
+        audio_ops.clean_audio(
+            args.input, args.output,
+            highpass=highpass, denoise=denoise,
+            compress=not args.no_compress,
+            compress_threshold=args.threshold, compress_ratio=args.ratio,
+            compress_attack=args.attack, compress_release=args.release,
+            loudnorm=not args.no_loudnorm,
+            target_lufs=args.lufs, true_peak=args.true_peak, lra=args.lra,
+            audio_codec=args.audio_codec, bitrate=args.bitrate,
+        )
+    aud_clean.set_defaults(func=_aud_clean)
+
+    aud_sep = subparsers.add_parser(
+        "audio-separate",
+        help="Separate audio into stems using a source-separation model (optional extra)",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description="""Run a source-separation model on an audio file and write one
+output file per stem to OUTPUT_DIR. Stem names come from the model.
+
+Requires the 'separation' optional extra:
+    uv sync --extra separation
+
+Models are auto-downloaded on first use. List available models with:
+    %(prog)s --list
+
+Examples:
+  # Vocals + instrumental (mel-band roformer)
+  %(prog)s song.mp3 mel_band_roformer_kim_FT_by_aname-tommy.ckpt ./stems/
+
+  # 4-stem (Demucs)
+  %(prog)s song.mp3 htdemucs_ft.yaml ./stems/
+
+  # Show available models
+  %(prog)s --list"""
+    )
+    aud_sep.add_argument("input", nargs="?", help="Input audio file")
+    aud_sep.add_argument("model", nargs="?", help="Model filename (see --list)")
+    aud_sep.add_argument("output_dir", nargs="?", help="Directory to write stems into")
+    aud_sep.add_argument("--list", action="store_true",
+                         help="List all supported models and exit")
+    def _aud_separate(args):
+        from . import separation
+        if args.list:
+            try:
+                for m in separation.list_models():
+                    print(m)
+            except ImportError as e:
+                raise SystemExit(str(e))
+            return
+        if not (args.input and args.model and args.output_dir):
+            raise SystemExit("audio-separate requires INPUT MODEL OUTPUT_DIR (or --list)")
+        try:
+            outputs = separation.separate_audio(args.input, args.model, args.output_dir)
+        except ImportError as e:
+            raise SystemExit(str(e))
+        for p in outputs:
+            print(p)
+    aud_sep.set_defaults(func=_aud_separate)
 
     aud_info = subparsers.add_parser("audio-info", help="Show audio information",
                                      formatter_class=argparse.RawTextHelpFormatter)

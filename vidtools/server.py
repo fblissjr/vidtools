@@ -27,7 +27,7 @@ from starlette.datastructures import UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import operations
+from . import audio_ops, operations, separation
 from ._version import __version__
 from .db import Database, FileRegistry, JobStore, migrate_legacy_registry
 from .jobs import Job, JobManager, JobStatus
@@ -453,6 +453,46 @@ def _dispatch_preset(input_path, output_path, params, **_):
     operations.apply_preset(input_path, output_path, params.get("preset_name", ""))
     return output_path
 
+_CLEAN_AUDIO_PARAMS = (
+    "highpass", "denoise", "compress", "compress_threshold", "compress_ratio",
+    "compress_attack", "compress_release", "loudnorm", "target_lufs",
+    "true_peak", "lra", "audio_codec", "bitrate",
+)
+_TRIM_TO_AUDIO_PARAMS = (
+    "buffer", "accurate", "video_codec", "audio_codec", "crf", "hwaccel",
+)
+
+
+def _passthrough(params: dict, keys) -> dict:
+    """Return only the keys present in params, so the callee's defaults win."""
+    return {k: params[k] for k in keys if k in params}
+
+
+def _dispatch_audio_separate(input_path, output_path, params, **ctx):
+    """Separate input into stems. `output_path` is treated as a directory hint;
+    stems land in `<output_path without suffix>/`. The primary stem is returned
+    as the job's output_file -- additional stems exist on disk in the same dir
+    but aren't auto-registered (single-output assumption in `_run_processing_job`).
+    """
+    out_dir = str(Path(output_path).with_suffix("")) if Path(output_path).suffix else output_path
+    model = params.get("model")
+    if not model:
+        raise RuntimeError("audio-separate requires 'model' param")
+    outputs = separation.separate_audio(input_path, model, out_dir)
+    if not outputs:
+        raise RuntimeError("separation produced no output stems")
+    return outputs[0]
+
+
+def _dispatch_clean_audio(input_path, output_path, params, **_):
+    audio_ops.clean_audio(input_path, output_path, **_passthrough(params, _CLEAN_AUDIO_PARAMS))
+    return output_path
+
+
+def _dispatch_trim_to_audio(input_path, output_path, params, **_):
+    operations.trim_to_audio(input_path, output_path, **_passthrough(params, _TRIM_TO_AUDIO_PARAMS))
+    return output_path
+
 _OP_DISPATCH = {
     "resize": _dispatch_resize,
     "convert": _dispatch_convert,
@@ -463,6 +503,9 @@ _OP_DISPATCH = {
     "concat": _dispatch_concat,
     "add-audio": _dispatch_add_audio,
     "preset": _dispatch_preset,
+    "trim-to-audio": _dispatch_trim_to_audio,
+    "audio-clean": _dispatch_clean_audio,
+    "audio-separate": _dispatch_audio_separate,
 }
 
 

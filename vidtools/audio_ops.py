@@ -174,6 +174,61 @@ def detect_silence(input_file: str, threshold: int = -30,
     return list(zip(starts, ends[:len(starts)]))
 
 
+def clean_audio(input_file: str, output_file: str, *,
+                highpass: int | None = 80,
+                denoise: float | None = -25.0,
+                compress: bool = True,
+                compress_threshold: float = -15.0,
+                compress_ratio: float = 3.0,
+                compress_attack: float = 5.0,
+                compress_release: float = 50.0,
+                loudnorm: bool = True,
+                target_lufs: float = -14.0,
+                true_peak: float = -1.0,
+                lra: float = 11.0,
+                audio_codec: str | None = None,
+                bitrate: str | None = None):
+    """Clean up a vocal-heavy audio track in a single ffmpeg pass.
+
+    Pipeline (each stage independently skippable):
+      1. highpass=f=N         -- removes rumble, plosives, AC hum
+      2. afftdn=nf=N          -- FFT-based hiss/broadband noise reduction
+      3. acompressor=...      -- dynamic range compression
+      4. loudnorm=I:TP:LRA    -- EBU R128 loudness normalization
+
+    Pass None for `highpass` or `denoise`, or False for `compress`/`loudnorm`,
+    to skip individual stages. Defaults are tuned for spoken vocal / sung lead.
+    """
+    filters: list[str] = []
+    if highpass:
+        filters.append(f"highpass=f={highpass}")
+    if denoise is not None:
+        filters.append(f"afftdn=nf={denoise:g}")
+    if compress:
+        filters.append(
+            f"acompressor=threshold={compress_threshold:g}dB:ratio={compress_ratio:g}:"
+            f"attack={compress_attack:g}:release={compress_release:g}"
+        )
+    if loudnorm:
+        # Don't apply :g here so float defaults like -1.0 keep their .0 form
+        # (matches EBU R128 conventional notation).
+        filters.append(f"loudnorm=I={target_lufs}:TP={true_peak}:LRA={lra}")
+
+    if not filters:
+        raise ValueError("clean_audio requires at least one stage enabled")
+
+    codec = _auto_codec(output_file, audio_codec)
+    command = ["ffmpeg", "-y", "-i", input_file, "-vn",
+               "-af", ",".join(filters), "-c:a", codec]
+    if bitrate:
+        command.extend(["-b:a", bitrate])
+    elif codec == "libmp3lame":
+        # VBR ~190 kbps, matches the recipe; only valid for libmp3lame
+        command.extend(["-q:a", "2"])
+    command.append(output_file)
+    run_ffmpeg(command)
+
+
 def remove_silence(input_file: str, output_file: str,
                    threshold: int = -30, min_duration: float = 0.5):
     """Remove silence from audio using silenceremove filter."""

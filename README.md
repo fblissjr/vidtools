@@ -57,6 +57,7 @@ vidtools subtitles in.mp4 out.mp4 -s subs.srt
 vidtools sanitize in.mp4 out.mp4                    # auto-crop, noise, strip metadata
 vidtools slideshow 'images/*.png' out.mp4 --size 1920x1080 --resize-mode pad
 vidtools add-audio video.mp4 music.mp3 out.mp4 --mix --volume 0.3
+vidtools trim-to-audio in.mp4 out.mp4 --buffer 0.5   # match video duration to audio + buffer
 vidtools srt-from-transcript transcript.txt out.srt
 ```
 
@@ -81,8 +82,23 @@ vidtools audio-cut in.mp3 out.mp3 --start 60 --end 90
 vidtools audio-normalize in.mp3 out.mp3 --target -16   # LUFS, two-pass loudnorm
 vidtools audio-fade in.mp3 out.mp3 --fade-in 3 --fade-out 3 --total-duration 60
 vidtools audio-resample in.mp3 out.mp3 -r 22050
+vidtools audio-clean in.mp3 out.mp3                    # highpass + denoise + compress + loudnorm
 vidtools audio-info file.mp3
 ```
+
+### Audio source separation (optional)
+
+Splits a track into stems (vocals/instrumental, or 4-stem) using mel-band roformer, BS-roformer, Demucs, MDX-Net, or VR via [`audio-separator`](https://github.com/nomadkaraoke/python-audio-separator). CoreML accelerated on Apple silicon.
+
+```bash
+uv sync --extra separation              # one-time install of torch + onnxruntime + librosa
+
+vidtools audio-separate --list                                                   # list available models
+vidtools audio-separate song.mp3 mel_band_roformer_kim_FT_by_aname-tommy.ckpt ./stems/
+vidtools audio-separate song.mp3 htdemucs_ft.yaml ./stems/                       # 4-stem
+```
+
+Models auto-download to the audio-separator cache on first use. The backend is swappable (`vidtools.separation.SeparationBackend` Protocol) so a future MLX-native implementation can replace the inference engine without changing the CLI.
 
 ### Pipelines (chain video ops in one ffmpeg invocation)
 

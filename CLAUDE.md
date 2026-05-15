@@ -20,7 +20,7 @@ Python >=3.12. Requires `ffmpeg` >= 5.1 and `yt-dlp` in PATH.
 - **No `progress_callback` parameter on operations.** Use the thread-local sink: `from .progress import report_progress; report_progress(percent, msg)`. Callers install sinks via `progress_context(sink)`.
 - **No `exit(1)` in library code.** Always raise `FfmpegError` (from `vidtools.progress`). The CLI entrypoint catches and exits.
 - **No stub handlers.** Only register CLI commands when the operation actually exists.
-- **Reuse helpers in `video_ops.py`**: `_add_faststart_if_mp4`, `_add_time_range_args`, `_build_scale_filter`, `_build_transpose_filter`, `_escape_subtitle_path`, `_get_video_encoder`, `_TRANSPOSE_MAP`, `DEFAULT_VIDEO_CODEC`, `DEFAULT_AUDIO_CODEC`. Pipeline.py imports them — don't duplicate.
+- **Reuse helpers in `video_ops.py`**: `_add_faststart_if_mp4`, `_add_time_range_args`, `_apply_encode_options`, `_build_scale_filter`, `_build_transpose_filter`, `_escape_subtitle_path`, `_get_video_encoder`, `_TRANSPOSE_MAP`, `DEFAULT_VIDEO_CODEC`, `DEFAULT_AUDIO_CODEC`. Pipeline.py imports them — don't duplicate. Use `_apply_encode_options` for the standard `-c:v / -c:a / -crf|-q:v` block (handles `crf=0` correctly; raw `if crf:` does not).
 - All ffmpeg commands include `-y` to avoid interactive stalls.
 
 ## Architecture
@@ -30,7 +30,8 @@ Modules under `vidtools/`:
 - **operations.py** — thin facade (`from .video_ops import *` etc.). Existing imports (`from vidtools.operations import cut_video`) still work. Add new ops to the appropriate `*_ops.py` file, not here.
 - **video_ops.py** — FFmpeg video operations + shared filter-builder helpers reused by `pipeline.py`.
 - **image_ops.py** — PIL image operations (no ffmpeg). Synchronous; no progress reporting needed.
-- **audio_ops.py** — FFmpeg audio operations including two-pass loudnorm in `normalize_audio`.
+- **audio_ops.py** — FFmpeg audio operations including two-pass loudnorm in `normalize_audio` and the single-pass vocal cleanup chain in `clean_audio`.
+- **separation.py** — Audio source separation behind a `SeparationBackend` Protocol. Current backend (`AudioSeparatorBackend`) wraps `audio-separator`. Optional extra: `uv sync --extra separation`. Caches the loaded model by `(model_name, output_dir)` so back-to-back calls don't reload weights.
 - **utils.py** — `run_ffmpeg(command)`. Single mode. Always raises `FfmpegError`. Reports progress via thread-local sink. Coalesces per-frame events to per-percent (no duplicate updates). Also contains `check_ffmpeg_installed()` (>= 5.1) and `is_valid_file()`.
 - **progress.py** — Thread-local progress sink (~50 lines). `set_progress_sink`, `get_progress_sink`, `report_progress`, `progress_context` (CM with guaranteed cleanup), `FfmpegError`. Same pattern as Python `logging` / Flask `g`.
 - **db.py** — SQLite at `data/vidtools.db` (WAL mode, single connection, threading.Lock). `Database`, `FileRegistry`, `JobStore`, `migrate_legacy_registry`. Repository pattern (no dict mimicry).
@@ -87,7 +88,7 @@ uv run uvicorn vidtools.server:app --host 0.0.0.0 --port 8910
 uv run pytest tests/ -v
 ```
 
-11 test files, ~176 tests: security, jobs, operations, ytdlp, server, audio_ops, image_ops, dispatch, progress, db, pipeline.
+12 test files, ~217 tests: security, jobs, operations, ytdlp, server, audio_ops, image_ops, dispatch, progress, db, pipeline, separation.
 
 ### Generate a test video for manual verification
 
@@ -102,7 +103,7 @@ ffmpeg -f lavfi -i testsrc=duration=4:size=640x480:rate=30 -y /tmp/test.mp4
 3. For ffmpeg commands: include `-y`. Reuse helpers from `video_ops.py` for filter construction.
 4. Add CLI command + inline handler closure in `cli.py:setup_argparse()`.
 5. Export from `vidtools/__init__.py`.
-6. If exposed to the web UI: add a `_dispatch_<op>` function in `server.py` and register in `_OP_DISPATCH`.
+6. If exposed to the web UI: add a `_dispatch_<op>` function in `server.py` and register in `_OP_DISPATCH`. **Dispatch handlers must not duplicate defaults** — use `_passthrough(params, KEYS)` so only present keys are forwarded and the op's own defaults win.
 7. If it's a chainable video filter: wire into `_FILTER_BUILDERS` (pipeline.py) + `_PIPELINE_OP_NAMES` + `_make_step_parser` (cli.py).
 8. Write tests. **Mock at `vidtools.<ops_module>.run_ffmpeg`** — patching `vidtools.operations.run_ffmpeg` doesn't work because operations.py is a re-export facade.
 

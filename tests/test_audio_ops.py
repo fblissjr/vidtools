@@ -1,8 +1,9 @@
 """Tests for audio operations."""
+import pytest
 from unittest.mock import patch, MagicMock
 from vidtools.audio_ops import (
     convert_audio, cut_audio, normalize_audio, mix_audio,
-    fade_audio, resample_audio,
+    fade_audio, resample_audio, clean_audio,
     AUDIO_CODEC_MAP,
 )
 
@@ -120,6 +121,118 @@ class TestMixAudio:
         assert "-filter_complex" in cmd
         idx = cmd.index("-filter_complex")
         assert "amix" in cmd[idx + 1]
+
+
+class TestCleanAudio:
+    """clean_audio chains highpass + afftdn + acompressor + loudnorm."""
+
+    def _filter_chain(self, cmd):
+        idx = cmd.index("-af")
+        return cmd[idx + 1]
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_default_chain_has_all_filters(self, mock_run):
+        clean_audio("in.mp3", "out.mp3")
+        chain = self._filter_chain(mock_run.call_args[0][0])
+        assert "highpass=f=80" in chain
+        assert "afftdn=nf=-25" in chain
+        assert "acompressor=" in chain
+        assert "loudnorm=" in chain
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_custom_highpass(self, mock_run):
+        clean_audio("in.mp3", "out.mp3", highpass=60)
+        chain = self._filter_chain(mock_run.call_args[0][0])
+        assert "highpass=f=60" in chain
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_highpass_disabled(self, mock_run):
+        clean_audio("in.mp3", "out.mp3", highpass=None)
+        chain = self._filter_chain(mock_run.call_args[0][0])
+        assert "highpass" not in chain
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_denoise_disabled(self, mock_run):
+        clean_audio("in.mp3", "out.mp3", denoise=None)
+        chain = self._filter_chain(mock_run.call_args[0][0])
+        assert "afftdn" not in chain
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_custom_denoise(self, mock_run):
+        clean_audio("in.mp3", "out.mp3", denoise=-30)
+        chain = self._filter_chain(mock_run.call_args[0][0])
+        assert "afftdn=nf=-30" in chain
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_compressor_disabled(self, mock_run):
+        clean_audio("in.mp3", "out.mp3", compress=False)
+        chain = self._filter_chain(mock_run.call_args[0][0])
+        assert "acompressor" not in chain
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_compressor_params_applied(self, mock_run):
+        clean_audio("in.mp3", "out.mp3",
+                    compress_threshold=-20, compress_ratio=4,
+                    compress_attack=10, compress_release=100)
+        chain = self._filter_chain(mock_run.call_args[0][0])
+        assert "threshold=-20dB" in chain
+        assert "ratio=4" in chain
+        assert "attack=10" in chain
+        assert "release=100" in chain
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_loudnorm_disabled(self, mock_run):
+        clean_audio("in.mp3", "out.mp3", loudnorm=False)
+        chain = self._filter_chain(mock_run.call_args[0][0])
+        assert "loudnorm" not in chain
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_loudnorm_targets(self, mock_run):
+        clean_audio("in.mp3", "out.mp3", target_lufs=-16, true_peak=-2.0, lra=7)
+        chain = self._filter_chain(mock_run.call_args[0][0])
+        assert "I=-16" in chain
+        assert "TP=-2.0" in chain
+        assert "LRA=7" in chain
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_mp3_default_quality_vbr(self, mock_run):
+        """mp3 output without explicit bitrate/quality should default to -q:a 2 (VBR ~190k)."""
+        clean_audio("in.wav", "out.mp3")
+        cmd = mock_run.call_args[0][0]
+        assert "-c:a" in cmd
+        ca = cmd.index("-c:a")
+        assert cmd[ca + 1] == "libmp3lame"
+        assert "-q:a" in cmd
+        qa = cmd.index("-q:a")
+        assert cmd[qa + 1] == "2"
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_explicit_bitrate_overrides_quality(self, mock_run):
+        clean_audio("in.wav", "out.mp3", bitrate="320k")
+        cmd = mock_run.call_args[0][0]
+        assert "-b:a" in cmd
+        assert "-q:a" not in cmd
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_wav_output_no_quality_flag(self, mock_run):
+        """PCM has no notion of quality; -q:a must not appear for wav."""
+        clean_audio("in.mp3", "out.wav")
+        cmd = mock_run.call_args[0][0]
+        assert "-q:a" not in cmd
+        ca = cmd.index("-c:a")
+        assert cmd[ca + 1] == "pcm_s16le"
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    def test_strips_video_stream(self, mock_run):
+        """Audio-only output must use -vn so input video tracks are dropped."""
+        clean_audio("in.mp4", "out.mp3")
+        cmd = mock_run.call_args[0][0]
+        assert "-vn" in cmd
+
+    def test_all_filters_disabled_raises(self):
+        with pytest.raises(ValueError, match="at least one"):
+            clean_audio("in.mp3", "out.mp3",
+                        highpass=None, denoise=None, compress=False, loudnorm=False)
 
 
 class TestCodecMap:
