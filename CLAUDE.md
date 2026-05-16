@@ -41,6 +41,9 @@ Modules under `vidtools/`:
 - **server.py** — FastAPI + WebSocket. Lifespan creates Database/FileRegistry/JobStore/JobManager and runs migration. `_OP_DISPATCH` dict maps op names to per-op `_dispatch_*` handlers. `_run_processing_job` is the entry point. `_run_and_broadcast` installs a WebSocket-broadcasting sink in the worker thread.
 - **security.py** — bcrypt + JWT + per-IP rate limiter. URL validation (HTTPS only).
 - **ytdlp.py** — yt-dlp subprocess wrapper. Reports progress via thread-local sink. Uses `--print after_move:filepath` for reliable output filename detection.
+  - `download()` — standard URL download (mp3/wav/mp4) with percent-based progress.
+  - `download_live()` — live-broadcast capture (mp4-only). Polls for the show to start (`--wait-for-video`), records from second 0 (`--live-from-start`), survives network blips (`--retries infinite --fragment-retries infinite`). Reports fragment-based progress (throttled to every 5th fragment so multi-hour streams don't fan out thousands of WebSocket broadcasts).
+  - Shared `_run_ytdlp_process(cmd, on_line)` helper handles subprocess lifecycle including graceful Ctrl-C (SIGTERM → yt-dlp finalizes/remuxes the partial file).
 - **presets.py** — Preset management with mtime-based cache. JSON file at `presets/ffmpeg_presets.json`.
 - **web/** — vanilla HTML/CSS/JS. No build step. Mobile-first. Safe DOM construction (no innerHTML). WebSocket reconnect with backoff.
 
@@ -114,6 +117,17 @@ ffmpeg -f lavfi -i testsrc=duration=4:size=640x480:rate=30 -y /tmp/test.mp4
 - Image op tests can use real in-memory PIL images (cheap, no ffmpeg required).
 - Audio/video op tests should mock `run_ffmpeg` rather than actually invoking ffmpeg (slow).
 - `db.py` tests use `tmp_path` fixture for isolated SQLite databases.
+
+## Live recording (dl-live / ytdlp-live)
+
+The `dl-live` CLI command and `ytdlp-live` web op record YouTube/HLS live broadcasts via `vidtools.ytdlp.download_live()`. Designed for shows that only stream live.
+
+**Output is mp4-only.** Two reasons we don't expose `.ts`:
+
+1. Passing `--hls-use-mpegts` OR `-o foo.ts` makes yt-dlp 2026.x invoke ffmpeg with the entire signed HLS master playlist URL as a single `-i` argument. YouTube's signed URLs run ~2 KB and overflow macOS `ARG_MAX` (256 KB), aborting with `OSError: Errno 63 File name too long`. Both triggers must be avoided.
+2. yt-dlp's default HLS path writes MPEG-TS data into a `.mp4` file during recording (FixupM3u8 converts to proper mp4 at clean exit), so the partial-file-is-playable property is preserved without forcing `.ts`.
+
+**Known issue (2026-05-16):** when `vidtools.ytdlp.download_live()` invokes yt-dlp via `subprocess.Popen` from Python, yt-dlp's internal ffmpeg invocation still hits the `Errno 63` bug for HLS streams (e.g., YouTube's format 95) — even with `%(ext)s` template output and `--remux-video mp4`. Direct shell invocation of the *same* `yt-dlp` binary with the *same* flags works. The Popen call site has no `shell=True`, no env overrides, no encoding tricks; the trigger has not been isolated. **Workaround**: for live recordings on macOS, invoke `yt-dlp` directly from the shell using the command profile in `vidtools/ytdlp.py:build_ytdlp_live_command`. Reproduces against DASH-served streams too once the format selector lands on HLS. Tracking: investigate yt-dlp source for the offending join, possibly file upstream.
 
 ## FFmpeg practices
 

@@ -127,6 +127,27 @@ vidtools convert in.mp4 out.mp4 --hwaccel        # macOS: uses VideoToolbox
 vidtools cut in.mp4 out.mp4 --start 0 --end 60 --accurate --hwaccel
 ```
 
+### Live broadcast recording (dl-live)
+
+For shows that are only streamed live. Waits for the scheduled start, captures from second 0, survives network blips.
+
+```bash
+vidtools dl-live "https://www.youtube.com/watch?v=<id>" show.mp4
+vidtools dl-live "https://www.youtube.com/@channel/live" capture.mp4 --from-now --no-wait
+```
+
+Output is mp4-only. See `CLAUDE.md` for the `ARG_MAX` reason and a known macOS-specific issue when the library is invoked via `subprocess.Popen` against an HLS-served stream — `examples/record_live.py` is a standalone yt-dlp wrapper that documents the same flag profile and surfaces the same issue. Until that's fixed, on macOS prefer invoking `yt-dlp` directly from the shell for live recordings:
+
+```bash
+uv --project /path/to/vidtools run yt-dlp \
+  --no-playlist --newline --no-part \
+  --retries infinite --fragment-retries infinite \
+  -f 'bv*+ba/b' --remux-video mp4 \
+  --live-from-start --wait-for-video 30 \
+  -o "show.%(ext)s" \
+  "<live broadcast url>"
+```
+
 ## Web UI
 
 The server exposes a mobile-first interface with three tabs:

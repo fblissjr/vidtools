@@ -41,6 +41,7 @@ from .security import (
     verify_token,
 )
 from .ytdlp import download as ytdlp_download
+from .ytdlp import download_live as ytdlp_download_live
 from .ytdlp import validate_download_params
 
 logger = structlog.get_logger(__name__)
@@ -537,6 +538,37 @@ def _run_processing_job(job: Job):
         job.output_file = output_id
 
 
+def _register_yt_output(
+    job: Job,
+    output_id: str,
+    safe_name: str,
+    actual_path: str,
+    output_path: str,
+    op_label: str,
+) -> None:
+    """Resolve the on-disk output file for a yt-dlp job and register it.
+
+    yt-dlp's printed path is the source of truth; we fall back to the requested
+    path, and finally scan OUTPUT_DIR by the output_id prefix in case yt-dlp
+    silently changed the extension.
+    """
+    actual = Path(actual_path)
+    if not actual.exists():
+        actual = Path(output_path)
+    if not actual.exists():
+        stem = safe_name.rsplit(".", 1)[0]
+        for candidate in OUTPUT_DIR.iterdir():
+            if candidate.is_file() and candidate.name.startswith(stem):
+                actual = candidate
+                break
+
+    if not actual.exists():
+        raise RuntimeError(f"{op_label} completed but output file not found")
+
+    file_registry.add(output_id, actual.name, str(actual), actual.stat().st_size, "output")
+    job.output_file = output_id
+
+
 def _run_ytdlp_job(job: Job):
     """Execute a yt-dlp download for a job."""
     url = job.url
@@ -547,34 +579,30 @@ def _run_ytdlp_job(job: Job):
     if errors:
         raise RuntimeError("; ".join(errors))
 
-    # Build output path using yt-dlp's template syntax
     output_id = uuid.uuid4().hex[:12]
     safe_name = sanitize_filename(f"download_{output_id}.{format_type}")
     output_path = str(OUTPUT_DIR / safe_name)
 
-    actual_path = ytdlp_download(
+    actual_path = ytdlp_download(url=url, output_path=output_path, format_type=format_type)
+    _register_yt_output(job, output_id, safe_name, actual_path, output_path, "Download")
+
+
+def _run_ytdlp_live_job(job: Job):
+    """Execute a yt-dlp live broadcast recording for a job."""
+    url = job.url
+    params = job.params
+
+    output_id = uuid.uuid4().hex[:12]
+    safe_name = sanitize_filename(f"live_{output_id}.mp4")
+    output_path = str(OUTPUT_DIR / safe_name)
+
+    actual_path = ytdlp_download_live(
         url=url,
         output_path=output_path,
-        format_type=format_type,
+        wait_interval=int(params.get("wait_interval", 60)),
+        from_start=bool(params.get("from_start", True)),
     )
-
-    # Find the actual output file -- yt-dlp may change the extension
-    actual = Path(actual_path)
-    if not actual.exists():
-        actual = Path(output_path)
-    if not actual.exists():
-        # Scan for any file starting with our output_id prefix
-        stem = safe_name.rsplit(".", 1)[0]
-        for candidate in OUTPUT_DIR.iterdir():
-            if candidate.is_file() and candidate.name.startswith(stem):
-                actual = candidate
-                break
-
-    if actual.exists():
-        file_registry.add(output_id, actual.name, str(actual), actual.stat().st_size, "output")
-        job.output_file = output_id
-    else:
-        raise RuntimeError("Download completed but output file not found")
+    _register_yt_output(job, output_id, safe_name, actual_path, output_path, "Live recording")
 
 
 @app.post("/api/jobs", dependencies=[Depends(require_auth)])
@@ -593,6 +621,12 @@ async def create_job(request: Request):
             raise HTTPException(status_code=400, detail="Invalid download URL")
         job = job_manager.create_job(op, params, url=url)
         work_fn = _run_ytdlp_job
+    elif op == "ytdlp-live":
+        url = body.get("url", "")
+        if not validate_download_url(url):
+            raise HTTPException(status_code=400, detail="Invalid download URL")
+        job = job_manager.create_job(op, params, url=url)
+        work_fn = _run_ytdlp_live_job
     else:
         input_file_id = body.get("input_file_id")
         if not input_file_id or input_file_id not in file_registry:

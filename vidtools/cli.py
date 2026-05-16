@@ -7,6 +7,7 @@ from . import operations
 from . import image_ops
 from . import audio_ops
 from . import presets
+from . import ytdlp
 
 
 # --- Input-type dispatch ---
@@ -935,6 +936,54 @@ Examples:
         print(orjson.dumps(info_data, option=orjson.OPT_INDENT_2).decode())
     aud_info.set_defaults(func=_aud_info)
 
+    # =============================================================== DL-LIVE ==
+
+    dl_live = subparsers.add_parser(
+        "dl-live",
+        help="Record a YouTube/HLS live broadcast",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description="""Record a live broadcast via yt-dlp. Output is always mp4
+(forcing .ts triggers a yt-dlp/ffmpeg ARG_MAX overflow on macOS with YouTube's
+long signed URLs -- see vidtools/ytdlp.py:build_ytdlp_live_command).
+
+Waits for the stream to start, records from the beginning by default, and
+survives network blips via infinite fragment retries.
+
+Stop the recording with Ctrl-C; the in-progress file remains playable.
+
+Examples:
+  %(prog)s "https://youtube.com/@channel/live" show.mp4
+  %(prog)s "https://www.youtube.com/watch?v=<id>" capture.mp4 --from-now
+"""
+    )
+    dl_live.add_argument("url", help="Live broadcast URL")
+    dl_live.add_argument("output", nargs="?", default="live_recording.mp4",
+                         help="Output path (default: live_recording.mp4). "
+                              "Non-mp4 suffixes are coerced to .mp4.")
+    dl_live.add_argument("--wait", type=int, default=60,
+                         help="Seconds between polls while waiting for the stream "
+                              "to start (default: 60). 0 = fail if not live now.")
+    dl_live.add_argument("--no-wait", action="store_true",
+                         help="Equivalent to --wait 0.")
+    dl_live.add_argument("--from-now", action="store_true",
+                         help="Join at live edge instead of recording from start.")
+
+    def _dl_live(args):
+        out = Path(args.output)
+        if out.suffix.lower() != ".mp4":
+            print(f"coercing output {out} -> {out.with_suffix('.mp4')} (mp4 only)",
+                  file=sys.stderr)
+            out = out.with_suffix(".mp4")
+        wait = 0 if args.no_wait else args.wait
+        final = ytdlp.download_live(
+            url=args.url,
+            output_path=str(out),
+            wait_interval=wait,
+            from_start=not args.from_now,
+        )
+        print(final)
+    dl_live.set_defaults(func=_dl_live)
+
     # ============================================================== PIPELINE ==
 
     pipeline = subparsers.add_parser(
@@ -1055,15 +1104,22 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _make_cli_sink():
     """Lazy tqdm progress bar -- only created when first progress event arrives.
-    Image ops finish without ever reporting progress, so the bar is never shown."""
+    Image ops finish without ever reporting progress, so the bar is never shown.
+    Surfaces text messages via tqdm postfix so live recording (where percent
+    is meaningless) still shows fragment/segment updates."""
     from tqdm import tqdm
     bar = None
+    last_msg = ""
     def sink(percent: int, message: str = ""):
-        nonlocal bar
+        nonlocal bar, last_msg
         if bar is None:
             bar = tqdm(total=100, unit="%", desc="Processing", dynamic_ncols=True)
-        bar.update(max(0, percent - bar.n))
-        if percent >= 100 and bar is not None:
+        if percent > bar.n:
+            bar.update(percent - bar.n)
+        if message and message != last_msg:
+            bar.set_postfix_str(message, refresh=True)
+            last_msg = message
+        if percent >= 100:
             bar.close()
             bar = None
     return sink

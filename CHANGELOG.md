@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.10.0
+
+### Added
+- **`dl-live`**: record YouTube/HLS live broadcasts that only stream live. Polls until the broadcast starts (`--wait`, default 60s), captures from the beginning (`--live-from-start`), and survives long broadcasts via infinite fragment retries. Output is mp4-only; yt-dlp writes MPEG-TS data into the .mp4 during recording and FixupM3u8 converts to proper mp4 at clean exit, so partial-file playability is preserved either way.
+- `--from-now` joins at the live edge instead of recording from the start. `--no-wait` fails immediately if the broadcast isn't live yet.
+- Exposed on the web as the `ytdlp-live` op; same flag surface via job params (`wait_interval`, `from_start`).
+- `examples/record_live.py`: standalone, zero-deps version of the same recipe (only needs `yt-dlp` on PATH). Useful for understanding which flags matter and why; also documents the macOS `ARG_MAX` issue with `.ts` output and `--hls-use-mpegts`.
+
+### Changed
+- `_make_cli_sink` now surfaces text messages via `tqdm.set_postfix_str`. Lets fragment-style live progress show real-time updates ("Recording fragment 142") even though the percent bar can't advance meaningfully for an unbounded stream.
+
+### Known issues (macOS, yt-dlp 2026.x)
+- When `download_live()` invokes yt-dlp via `subprocess.Popen` for an HLS-served stream (e.g., YouTube's format 95), yt-dlp's internal ffmpeg invocation aborts with `OSError: Errno 63 File name too long`. The very same `yt-dlp` binary with the very same flag list works when invoked directly from the shell. Trigger has not been isolated. Workaround: for live recordings on macOS, invoke `yt-dlp` directly. See `CLAUDE.md` "Live recording" section.
+
+### Dependencies
+- `yt-dlp`: floor raised from `>=2024.0.0` to `>=2026.3.17`. Both versions can hit the `ARG_MAX` bug above; the bump is for general extractor freshness.
+
 ## 0.9.0
 
 ### Added

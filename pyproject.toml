@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vidtools"
-version = "0.9.0"
+version = "0.10.0"
 description = "FFmpeg + PIL + yt-dlp media processing tool (video, image, audio) with web UI and CLI"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -20,7 +20,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "python-jose[cryptography]>=3.3.0",
     "bcrypt>=4.0.0",
-    "yt-dlp>=2024.0.0",
+    "yt-dlp>=2026.3.17",
     "orjson>=3.9.0",
 ]
 classifiers = [

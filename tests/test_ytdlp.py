@@ -1,10 +1,10 @@
 """Tests for vidtools.ytdlp module."""
 
-import pytest
-
 from vidtools.ytdlp import (
-    parse_ytdlp_progress,
     build_ytdlp_command,
+    build_ytdlp_live_command,
+    parse_ytdlp_live_progress,
+    parse_ytdlp_progress,
     validate_download_params,
 )
 
@@ -109,6 +109,89 @@ class TestBuildYtdlpCommand:
         assert "--match-filter" in cmd
         idx = cmd.index("--match-filter")
         assert "duration" in cmd[idx + 1]
+
+
+class TestBuildYtdlpLiveCommand:
+    URL = "https://www.youtube.com/@channel/live"
+
+    def test_default_flags(self):
+        cmd = build_ytdlp_live_command(self.URL, "/tmp/show.mp4")
+        for flag in (
+            "--no-part", "--live-from-start",
+            "--retries", "--fragment-retries",
+        ):
+            assert flag in cmd, f"missing {flag}"
+        assert cmd[cmd.index("--retries") + 1] == "infinite"
+        assert cmd[cmd.index("--fragment-retries") + 1] == "infinite"
+
+    def test_always_remux_mp4(self):
+        """Regression: the long-URL/ARG_MAX workaround requires mp4 output
+        and `--remux-video mp4` for clean final output. Both must be present."""
+        cmd = build_ytdlp_live_command(self.URL, "/tmp/show.mp4")
+        assert "--remux-video" in cmd
+        assert cmd[cmd.index("--remux-video") + 1] == "mp4"
+
+    def test_no_hls_use_mpegts(self):
+        """Regression: `--hls-use-mpegts` triggers OSError Errno 63 on macOS
+        for YouTube HLS streams (long signed manifest URL overflows ARG_MAX)."""
+        cmd = build_ytdlp_live_command(self.URL, "/tmp/show.mp4")
+        assert "--hls-use-mpegts" not in cmd
+
+    def test_wait_interval(self):
+        cmd = build_ytdlp_live_command(self.URL, "/tmp/x.mp4", wait_interval=30)
+        assert "--wait-for-video" in cmd
+        assert cmd[cmd.index("--wait-for-video") + 1] == "30"
+
+    def test_no_wait(self):
+        cmd = build_ytdlp_live_command(self.URL, "/tmp/x.mp4", wait_interval=0)
+        assert "--wait-for-video" not in cmd
+
+    def test_from_now(self):
+        cmd = build_ytdlp_live_command(self.URL, "/tmp/x.mp4", from_start=False)
+        assert "--live-from-start" not in cmd
+
+    def test_no_duration_filter(self):
+        """Live streams have unknown duration; the duration<= filter must not be added."""
+        cmd = build_ytdlp_live_command(self.URL, "/tmp/x.mp4")
+        assert "--match-filter" not in cmd
+
+    def test_url_is_last(self):
+        cmd = build_ytdlp_live_command(self.URL, "/tmp/x.mp4")
+        assert cmd[-1] == self.URL
+
+
+class TestParseYtdlpLiveProgress:
+    def test_waiting(self):
+        result = parse_ytdlp_live_progress("[wait] Waiting for video to be available")
+        assert result is not None
+        assert "wait" in result["message"].lower()
+
+    def test_fragment(self):
+        result = parse_ytdlp_live_progress("[download] Downloading fragment 42")
+        assert result is not None
+        assert "42" in result["message"]
+        assert result["percent"] < 100  # never report complete mid-stream
+
+    def test_fragment_percent_is_monotonic(self):
+        """Regression: fragment 150 must not wrap back to 50 (was `frag % 100`).
+        Wrapping makes the CLI bar stall and the web UI jump backward."""
+        low = parse_ytdlp_live_progress("[download] Downloading fragment 50")
+        high = parse_ytdlp_live_progress("[download] Downloading fragment 150")
+        assert low is not None and high is not None
+        assert high["percent"] >= low["percent"]
+        assert high["percent"] == 99  # capped, not wrapped
+
+    def test_hls_segment(self):
+        line = "[hls @ 0x140] Opening 'https://example.com/path/seg-789-foo.ts' for reading"
+        result = parse_ytdlp_live_progress(line)
+        assert result is not None
+        assert "789" in result["message"]
+
+    def test_unrelated_line(self):
+        assert parse_ytdlp_live_progress("[youtube] Extracting video info") is None
+
+    def test_empty(self):
+        assert parse_ytdlp_live_progress("") is None
 
 
 class TestValidateDownloadParams:
