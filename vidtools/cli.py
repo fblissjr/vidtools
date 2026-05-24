@@ -194,7 +194,7 @@ Examples:
     _add_time_range(convert)
     _add_io(convert)
     def _convert_video(args):
-        fmt = args.format or args.output.rsplit('.', 1)[-1]
+        fmt = args.format or Path(args.output).suffix.lstrip(".")
         crf = args.crf
         if crf is None and args.quality is not None:
             crf = _quality_to_crf(args.quality)
@@ -690,6 +690,8 @@ Examples:
 
     # ---------------------------------------------------------------- preset
     preset_parser = subparsers.add_parser("preset", help="Manage and apply presets")
+    # `vidtools preset` with no sub-action prints help instead of crashing on args.func.
+    preset_parser.set_defaults(func=lambda _args: preset_parser.print_help())
     preset_sub = preset_parser.add_subparsers(dest="preset_action")
 
     apply = preset_sub.add_parser("apply", help="Apply a preset")
@@ -886,12 +888,12 @@ def _make_cli_sink():
 
 def handle_command(args: argparse.Namespace) -> None:
     from .progress import progress_context
-    if args.command:
+    # A bare command with sub-actions (e.g. `preset`) may leave func unset.
+    if args.command and getattr(args, "func", None) is not None:
         with progress_context(_make_cli_sink()):
             args.func(args)
-    else:
-        if _parser is not None:
-            _parser.print_help()
+    elif _parser is not None:
+        _parser.print_help()
 
 
 def main():

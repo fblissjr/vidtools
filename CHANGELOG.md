@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.1
+
+### Fixed
+- `vidtools preset` with no sub-action now prints help instead of crashing with `AttributeError: 'Namespace' object has no attribute 'func'`. `handle_command` also guards against a missing `func` defensively.
+
+### Internal
+- Simplification pass over the unified-CLI code: `convert` now derives the output extension with `Path(...).suffix` (consistent with the rest of cli.py); clarified the `crop_video` validation docstring (it checks geometry signs, not full bounds).
+
 ## 0.13.0
 
 ### Added

@@ -76,13 +76,18 @@ vidtools adjust --brightness 1.2 --contrast 1.1 --rotation 90 --flip horizontal 
 
 (For image resize/convert/crop/rotate/info, use the universal verbs above.)
 
-### Audio-only commands (FFmpeg)
+### Audio commands (FFmpeg)
+
+These also accept **video** inputs: an audio output extracts and processes the
+audio; a video output processes the audio track and keeps the picture.
 
 ```bash
 vidtools normalize --target -16 in.mp3 out.mp3        # LUFS, two-pass loudnorm
+vidtools normalize clip.mp4 out.mp4                   # video kept, audio normalized
 vidtools fade --fade-in 3 --fade-out 3 --total-duration 60 in.mp3 out.mp3
 vidtools resample -r 22050 in.mp3 out.mp3
 vidtools clean in.mp3 out.mp3                          # highpass + denoise + compress + loudnorm
+vidtools clean lecture.mp4 cleaned.mp4                # clean the talk's audio, keep video
 ```
 
 (For audio convert/trim/info, use the universal verbs above.)
@@ -247,7 +252,7 @@ deploy/
   setup.sh           # Ubuntu deployment script
   vidtools.service   # systemd unit file (hardened)
 data/                # Uploads, output, temp, SQLite DB — gitignored except .gitkeep
-tests/               # 12 files, ~256 tests (run: uv run pytest tests/ -v)
+tests/               # 12 files, ~265 tests (run: uv run pytest tests/ -v)
 ```
 
 ## Tests
@@ -256,4 +261,4 @@ tests/               # 12 files, ~256 tests (run: uv run pytest tests/ -v)
 uv run pytest tests/ -v
 ```
 
-256 tests across security, jobs, operations, video/image/audio ops, ytdlp, server, dispatch, progress, db, pipeline, and separation.
+265 tests across security, jobs, operations, video/image/audio ops, ytdlp, server, dispatch, progress, db, pipeline, and separation.

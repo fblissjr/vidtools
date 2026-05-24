@@ -213,3 +213,17 @@ class TestPipelineConvertFlags:
         steps = _parse_pipeline_steps(["trim", "--start", "5", "--end", "9"])
         assert steps[0].name == "cut"
         assert steps[0].params["start"] == "5"
+
+
+class TestPresetNoActionDoesNotCrash:
+    """`vidtools preset` with no sub-action should print help, not AttributeError."""
+
+    def test_preset_has_default_func(self):
+        args = setup_argparse().parse_args(["preset"])
+        assert hasattr(args, "func")  # default handler set on the parent parser
+
+    def test_handle_command_survives_missing_func(self):
+        import argparse as _ap
+        from vidtools.cli import handle_command
+        # A namespace with a command but no func must not raise.
+        handle_command(_ap.Namespace(command="bogus"))  # falls through to help
