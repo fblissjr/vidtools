@@ -110,14 +110,14 @@ ffmpeg -f lavfi -i testsrc=duration=4:size=640x480:rate=30 -y /tmp/test.mp4
 5. Export from `vidtools/__init__.py`.
 6. If exposed to the web UI: add a `_dispatch_<op>` function in `server.py` and register in `_OP_DISPATCH`. **Dispatch handlers must not duplicate defaults** — use `_passthrough(params, KEYS)` so only present keys are forwarded and the op's own defaults win.
 7. If it's a chainable video filter: wire into `_FILTER_BUILDERS` (pipeline.py) + `_PIPELINE_OP_NAMES` + `_make_step_parser` (cli.py).
-8. Write tests. **Mock at `vidtools.<ops_module>.run_ffmpeg`** — patching `vidtools.operations.run_ffmpeg` doesn't work because operations.py is a re-export facade.
+8. Write tests. **Mock at `vidtools.<ops_module>.run_ffmpeg`** — patching `vidtools.operations.run_ffmpeg` doesn't work because operations.py is a re-export facade. **Also add a real-ffmpeg test in `tests/test_integration.py` if the op is behavior-sensitive** (stream/container/codec choices, seeking, frame-at-timestamp, encoder availability). Mocked tests verify command *shape*; they cannot catch ffmpeg *behavior*, and that gap is where this project's sharpest bugs lived — `convert→mp3` muxer failure, `screenshot` seek-past-EOF exiting 0 with no file, PCM-in-mp4 from the audio remux, a build missing libwebp. Rule of thumb: if you'd have to run ffmpeg by hand to be sure it works, the unit test won't catch it.
 
 ## Testing gotchas
 
 - `monkeypatch.setattr("vidtools.video_ops.run_ffmpeg", mock)` — NOT `vidtools.operations.run_ffmpeg`.
 - Thread-local progress sink could leak between tests. The `progress_context()` CM auto-clears. `test_progress.py` uses an autouse `_clear_sink` fixture as a safety net.
 - Image op tests can use real in-memory PIL images (cheap, no ffmpeg required).
-- Audio/video op tests should mock `run_ffmpeg` rather than actually invoking ffmpeg (slow).
+- Audio/video op tests mock `run_ffmpeg` (fast, command-shape assertions). For behavior that depends on what ffmpeg actually does, add a real-ffmpeg case in `tests/test_integration.py` instead — it runs the toolchain on a generated clip and auto-skips when ffmpeg is absent. Mocks for shape, integration for behavior.
 - `db.py` tests use `tmp_path` fixture for isolated SQLite databases.
 
 ## Live recording (dl-live / ytdlp-live)
