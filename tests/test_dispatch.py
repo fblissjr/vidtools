@@ -186,17 +186,19 @@ class TestAudioVerbVideoAware:
         assert calls["add_audio"] == []
 
     def test_video_in_video_out_remuxes(self, monkeypatch):
+        # The remux lives in video_ops.apply_audio_op_keep_video; the temp is
+        # .m4a (AAC) so it muxes cleanly into mp4 (not raw PCM).
         calls, run_op = self._recorder()
-        monkeypatch.setattr("vidtools.cli.operations.add_audio",
+        monkeypatch.setattr("vidtools.video_ops.add_audio",
                             lambda inp, aud, out, **k: calls["add_audio"].append((inp, aud, out)))
         args = MagicMock(); args.input = "clip.mp4"; args.output = "out.mp4"
         _audio_verb(run_op)(args)
         assert len(calls["op"]) == 1
         op_in, op_out = calls["op"][0]
-        assert op_in == "clip.mp4" and op_out.endswith(".wav")  # processed into a temp
+        assert op_in == "clip.mp4" and op_out.endswith(".m4a")  # processed into a temp
         assert len(calls["add_audio"]) == 1
         inp, aud, out = calls["add_audio"][0]
-        assert inp == "clip.mp4" and aud.endswith(".wav") and out == "out.mp4"
+        assert inp == "clip.mp4" and aud.endswith(".m4a") and out == "out.mp4"
 
 
 class TestPipelineConvertFlags:

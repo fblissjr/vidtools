@@ -23,6 +23,13 @@ structlog.configure(
 
 logger = structlog.get_logger(__name__)
 
+# --- Media-type classification by extension (single source of truth) ---
+# Used by CLI smart dispatch (_detect_kind) and the audio-op video-aware remux.
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv",
+              ".m4v", ".mpg", ".mpeg", ".gif"}
+AUDIO_EXTS = {".mp3", ".wav", ".flac", ".aac", ".ogg", ".opus", ".m4a", ".wma"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif"}
+
 # --- Utility Functions ---
 
 MIN_FFMPEG_VERSION = (5, 1)

@@ -111,7 +111,7 @@ def optimize_image(input_file: str, output_file: str, quality: int = 80,
 
 def adjust_image(input_file: str, output_file: str,
                  brightness: float | None = None, contrast: float | None = None,
-                 rotation: int | None = None, flip: str | None = None):
+                 rotation: float | None = None, flip: str | None = None):
     """Adjust image brightness, contrast, rotation, or flip."""
     with Image.open(input_file) as img:
         if brightness is not None:

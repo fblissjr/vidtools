@@ -501,7 +501,13 @@ def _dispatch_audio_separate(input_path, output_path, params, **ctx):
 
 
 def _dispatch_clean_audio(input_path, output_path, params, **_):
-    audio_ops.clean_audio(input_path, output_path, **_passthrough(params, _CLEAN_AUDIO_PARAMS))
+    # Video-aware (same as the CLI `clean`): a video input + video output keeps
+    # the video and cleans the audio track; an audio output extracts audio.
+    kwargs = _passthrough(params, _CLEAN_AUDIO_PARAMS)
+    operations.apply_audio_op_keep_video(
+        input_path, output_path,
+        lambda i, o: audio_ops.clean_audio(i, o, **kwargs),
+    )
     return output_path
 
 

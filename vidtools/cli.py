@@ -1,10 +1,10 @@
 import argparse
-import os
 import sys
-import tempfile
 import orjson
 from pathlib import Path
-from .utils import is_valid_file, check_ffmpeg_installed
+from .utils import (
+    is_valid_file, check_ffmpeg_installed, VIDEO_EXTS, AUDIO_EXTS, IMAGE_EXTS,
+)
 from . import operations
 from . import image_ops
 from . import audio_ops
@@ -13,11 +13,7 @@ from . import ytdlp
 
 
 # --- Input-type dispatch ---
-
-VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv",
-              ".m4v", ".mpg", ".mpeg", ".gif"}
-AUDIO_EXTS = {".mp3", ".wav", ".flac", ".aac", ".ogg", ".opus", ".m4a", ".wma"}
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif"}
+# VIDEO_EXTS / AUDIO_EXTS / IMAGE_EXTS live in utils.py (shared with video_ops).
 
 
 def _detect_kind(path: str) -> str:
@@ -100,27 +96,15 @@ def _add_time_range(parser):
 def _audio_verb(run_audio_op):
     """Adapt an audio operation so the verb also works on video inputs.
 
-    `run_audio_op(args, in_path, out_path)` runs the underlying audio op.
-      - audio input: run directly.
-      - video input + audio output (e.g. out.mp3): run directly -- ffmpeg reads
-        the video's audio stream and writes audio.
-      - video input + video output: process the audio track into a temp file,
-        then remux it back over the original video (the video stream is copied),
-        so e.g. `normalize clip.mp4 out.mp4` keeps the video and fixes the audio."""
+    `run_audio_op(args, in_path, out_path)` runs the underlying audio op. The
+    audio-output-vs-video-remux routing lives in `apply_audio_op_keep_video`
+    (shared with the web `clean` dispatch), so e.g. `normalize clip.mp4 out.mp4`
+    keeps the video and fixes the audio, while `... out.mp3` extracts audio."""
     def handler(args):
-        in_kind = _detect_kind(args.input)
-        out_is_audio = Path(args.output).suffix.lower() in AUDIO_EXTS
-        if in_kind != "video" or out_is_audio:
-            run_audio_op(args, args.input, args.output)
-            return
-        fd, tmp_audio = tempfile.mkstemp(suffix=".wav")
-        os.close(fd)
-        try:
-            run_audio_op(args, args.input, tmp_audio)
-            operations.add_audio(args.input, tmp_audio, args.output, mode="replace")
-        finally:
-            if os.path.exists(tmp_audio):
-                os.remove(tmp_audio)
+        operations.apply_audio_op_keep_video(
+            args.input, args.output,
+            lambda i, o: run_audio_op(args, i, o),
+        )
     return handler
 
 
@@ -212,8 +196,16 @@ Examples:
         if bitrate is None and args.quality is not None:
             bitrate = _quality_to_audio_bitrate(args.quality)
         audio_ops.convert_audio(args.input, args.output, audio_codec=args.audio_codec, bitrate=bitrate)
-    convert.set_defaults(func=_make_smart("convert", video=_convert_video,
-                                          image=_convert_image, audio=_convert_audio))
+    def _convert_dispatch(args):
+        # An audio-only OUTPUT extracts/encodes audio regardless of input kind,
+        # so --quality maps to bitrate (not video CRF) on that path. Otherwise
+        # route by input type.
+        if Path(args.output).suffix.lower() in AUDIO_EXTS:
+            _convert_audio(args)
+        else:
+            _make_smart("convert", video=_convert_video,
+                        image=_convert_image, audio=_convert_audio)(args)
+    convert.set_defaults(func=_convert_dispatch)
 
     # ---------------------------------------------------------------- resize --
     resize = subparsers.add_parser(
@@ -305,7 +297,11 @@ Time formats: HH:MM:SS.mmm, seconds (66.5), or MM:SS"""
     def _rotate_video(args):
         operations.rotate_video(args.input, args.output, args.rotation)
     def _rotate_image(args):
-        image_ops.adjust_image(args.input, args.output, rotation=int(args.rotation))
+        try:
+            angle = float(args.rotation)
+        except ValueError:
+            raise ValueError(f"Invalid rotation {args.rotation!r}: expected a number of degrees")
+        image_ops.adjust_image(args.input, args.output, rotation=angle)
     rotate.set_defaults(func=_make_smart("rotate", video=_rotate_video, image=_rotate_image))
 
     # ═══════════════════════════════════════════════════════ VIDEO-ONLY ══════
@@ -903,7 +899,10 @@ def main():
         sys.exit("Error: ffmpeg not found in PATH. Please install ffmpeg first.")
     try:
         handle_command(parse_arguments())
-    except FfmpegError as e:
+    except (FfmpegError, ValueError) as e:
+        # ValueError covers operation-level validation (bad rotation/crop
+        # geometry, missing fade args, non-integer rotate angle, etc.) so the
+        # user gets a clean message + exit 1 instead of a raw traceback.
         print(f"\nError: {e}", file=sys.stderr)
         sys.exit(1)
 

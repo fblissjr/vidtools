@@ -41,6 +41,14 @@ def _stream_types(path: str) -> list[str]:
     return out.split()
 
 
+def _audio_codec(path: str) -> str:
+    return subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "stream=codec_name", "-of", "csv=p=0", path],
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+
 def _video_width(path: str) -> int:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -86,6 +94,17 @@ class TestConvertReal:
         out = str(tmp_path / "out.gif")
         convert_format(media["clip"], out, "gif")
         assert os.path.getsize(out) > 0
+
+    def test_video_to_mp3_quality_maps_to_bitrate(self, media, tmp_path):
+        """`convert clip.mp4 out.mp3 -q N` must honor --quality (route to the
+        audio path), not silently ignore it. Higher quality -> bigger file."""
+        from vidtools.cli import parse_arguments
+        hi, lo = str(tmp_path / "hi.mp3"), str(tmp_path / "lo.mp3")
+        for out, q in ((hi, "95"), (lo, "20")):
+            args = parse_arguments(["convert", media["clip"], out, "-q", q])
+            args.func(args)
+        assert _audio_codec(hi) == "mp3" and _audio_codec(lo) == "mp3"
+        assert os.path.getsize(hi) > os.path.getsize(lo)
 
 
 class TestScreenshotReal:
@@ -150,6 +169,8 @@ class TestAudioVerbRemuxReal:
         handler = _audio_verb(lambda a, i, o: normalize_audio(i, o, target_loudness=a.target))
         handler(args)
         assert set(_stream_types(out)) == {"audio", "video"}
+        # Remux must produce a container-friendly codec (aac), not raw PCM.
+        assert _audio_codec(out) == "aac"
 
     def test_normalize_video_to_audio_output_extracts(self, media, tmp_path):
         from types import SimpleNamespace
@@ -159,3 +180,26 @@ class TestAudioVerbRemuxReal:
         handler = _audio_verb(lambda a, i, o: normalize_audio(i, o, target_loudness=a.target))
         handler(args)
         assert _stream_types(out) == ["audio"]
+
+
+class TestCliErrorHandling:
+    """main() should turn operation ValueErrors into a clean exit, not a traceback."""
+
+    def test_bad_rotation_exits_cleanly(self, media, tmp_path, monkeypatch):
+        import sys
+        from vidtools import cli
+        out = str(tmp_path / "o.png")
+        monkeypatch.setattr(sys, "argv", ["vidtools", "rotate", "-r", "abc", media["img"], out])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 1
+        assert not os.path.exists(out)
+
+    def test_image_rotate_accepts_float_angle(self, media, tmp_path):
+        from vidtools.cli import parse_arguments
+        out = str(tmp_path / "r.png")
+        args = parse_arguments(["rotate", "-r", "45.5", media["img"], out])
+        args.func(args)
+        from PIL import Image
+        with Image.open(out) as im:
+            assert im.size[0] > 0

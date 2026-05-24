@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vidtools"
-version = "0.14.0"
+version = "0.14.1"
 description = "FFmpeg + PIL + yt-dlp media processing tool (video, image, audio) with web UI and CLI"
 readme = "README.md"
 license = {file = "LICENSE"}

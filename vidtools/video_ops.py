@@ -10,7 +10,7 @@ from PIL import Image, ImageOps
 import numpy as np
 import datetime
 
-from .utils import run_ffmpeg, logger
+from .utils import run_ffmpeg, logger, VIDEO_EXTS, AUDIO_EXTS
 from .progress import FfmpegError
 from .image_ops import convert_image
 from .audio_ops import AUDIO_CODEC_MAP, _auto_codec
@@ -560,6 +560,33 @@ def add_audio(input_file: str, audio_file: str, output_file: str,
     _add_faststart_if_mp4(command, output_file)
     command.append(output_file)
     run_ffmpeg(command)
+
+
+def apply_audio_op_keep_video(input_file: str, output_file: str, audio_op):
+    """Run an audio operation, keeping the video when the input is one.
+
+    `audio_op(in_path, out_path)` processes audio. Routing by file type:
+      - non-video input, or audio output container: run `audio_op` directly.
+      - video input + video output: process the audio into a temp .m4a (AAC --
+        a container-friendly codec; a raw-PCM .wav would mux into mp4 as a
+        non-standard stream many players reject) and remux it over the original
+        video, copying the video stream.
+
+    Shared by the CLI audio verbs (normalize/fade/resample/clean) and the web
+    `clean` dispatch so both behave identically on video inputs."""
+    in_ext = os.path.splitext(input_file)[1].lower()
+    out_ext = os.path.splitext(output_file)[1].lower()
+    if in_ext not in VIDEO_EXTS or out_ext in AUDIO_EXTS:
+        audio_op(input_file, output_file)
+        return
+    fd, tmp_audio = tempfile.mkstemp(suffix=".m4a")
+    os.close(fd)
+    try:
+        audio_op(input_file, tmp_audio)
+        add_audio(input_file, tmp_audio, output_file, mode="replace")
+    finally:
+        if os.path.exists(tmp_audio):
+            os.remove(tmp_audio)
 
 
 def create_srt_from_transcript(input_file: str, output_file: str):

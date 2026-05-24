@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.14.1
+
+### Fixed
+- `convert <video> <audio> --quality N` (e.g. `convert clip.mp4 out.mp3 -q 95`) now honors `--quality`. Audio-only output is routed to the audio encoder (quality→bitrate) regardless of input type; previously a video input went through the video path where `--quality` became an unused CRF and was silently dropped.
+- The CLI reports operation validation errors (bad rotation, invalid crop geometry, missing fade args, non-numeric rotate angle) as a clean `Error: ...` with exit 1 instead of a raw traceback — `main()` now catches `ValueError` alongside `FfmpegError`.
+- Audio verbs on a video input writing a video output (`normalize`/`fade`/`resample`/`clean clip.mp4 out.mp4`) now produce AAC audio, not raw PCM — the latter muxed into mp4 as a non-standard stream many players reject.
+- Web **Clean Audio** on a video upload keeps the video now (processes the audio track and remuxes), matching the CLI; previously it dropped the video stream.
+- `rotate` on an image accepts non-integer angles (e.g. `45.5`) and gives a clear message on non-numeric input.
+
+### Internal
+- Extracted `video_ops.apply_audio_op_keep_video` as the single audio-or-remux router, shared by the CLI audio verbs and the web `clean` dispatch.
+- Moved the media-type extension sets (`VIDEO_EXTS`/`AUDIO_EXTS`/`IMAGE_EXTS`) to `utils.py` as the single source of truth.
+
 ## 0.14.0
 
 ### Added
