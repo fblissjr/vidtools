@@ -1,7 +1,10 @@
 """Tests for vidtools.operations module -- error handling and API contracts."""
 
+from pathlib import Path
+
 import pytest
 
+from vidtools.progress import FfmpegError
 from vidtools.operations import (
     resize_video,
     rotate_video,
@@ -10,6 +13,7 @@ from vidtools.operations import (
     add_audio,
     sanitize_video,
     trim_to_audio,
+    screenshot,
 )
 
 
@@ -407,3 +411,88 @@ class TestNoProgressCallbackParam:
             assert "progress_callback" not in sig.parameters, (
                 f"{name} still has progress_callback parameter"
             )
+
+
+class TestScreenshot:
+    """Single-frame grab. ffmpeg extracts the frame; PIL handles lossy re-encode
+    (jpg/webp) so quality semantics stay consistent regardless of ffmpeg's
+    compiled-in image encoders."""
+
+    @pytest.fixture()
+    def capture_ffmpeg(self, monkeypatch):
+        """Capture the ffmpeg command and simulate it writing a frame to the
+        output path (the last argv element), so the produced-frame check passes."""
+        calls = []
+        def fake_run(cmd):
+            calls.append(list(cmd))
+            Path(cmd[-1]).write_bytes(b"\x89PNG\r\n\x1a\n")  # non-empty stub frame
+        monkeypatch.setattr("vidtools.video_ops.run_ffmpeg", fake_run)
+        return calls
+
+    @pytest.fixture()
+    def capture_pil(self, monkeypatch):
+        calls = []
+        def fake_convert(src, dst, quality=85):
+            calls.append((src, dst, quality))
+        monkeypatch.setattr("vidtools.video_ops.convert_image", fake_convert)
+        return calls
+
+    def test_png_is_single_ffmpeg_call(self, capture_ffmpeg, capture_pil, tmp_path):
+        out = str(tmp_path / "shot.png")
+        screenshot("in.mp4", out, timestamp="00:00:05")
+        assert len(capture_ffmpeg) == 1
+        cmd = capture_ffmpeg[0]
+        assert cmd[-1] == out
+        assert cmd[cmd.index("-frames:v") + 1] == "1"
+        assert "-update" in cmd
+
+    def test_png_not_reencoded_through_pil(self, capture_ffmpeg, capture_pil, tmp_path):
+        screenshot("in.mp4", str(tmp_path / "shot.png"))
+        assert capture_pil == []  # png is lossless, written directly by ffmpeg
+
+    def test_fast_seek_places_ss_before_input(self, capture_ffmpeg, capture_pil, tmp_path):
+        screenshot("in.mp4", str(tmp_path / "shot.png"), timestamp="10")
+        cmd = capture_ffmpeg[0]
+        assert cmd.index("-ss") < cmd.index("-i")
+        assert cmd[cmd.index("-ss") + 1] == "10"
+
+    def test_accurate_seek_places_ss_after_input(self, capture_ffmpeg, capture_pil, tmp_path):
+        screenshot("in.mp4", str(tmp_path / "shot.png"), timestamp="10", accurate=True)
+        cmd = capture_ffmpeg[0]
+        assert cmd.index("-ss") > cmd.index("-i")
+
+    def test_no_timestamp_omits_ss(self, capture_ffmpeg, capture_pil, tmp_path):
+        screenshot("in.mp4", str(tmp_path / "shot.png"))
+        assert "-ss" not in capture_ffmpeg[0]
+
+    def test_empty_string_timestamp_omits_ss(self, capture_ffmpeg, capture_pil, tmp_path):
+        """An empty timestamp (e.g. blank web field forwarded as "") must not
+        emit `-ss ""`, which ffmpeg rejects."""
+        screenshot("in.mp4", str(tmp_path / "shot.png"), timestamp="")
+        assert "-ss" not in capture_ffmpeg[0]
+
+    def test_zero_timestamp_still_seeks(self, capture_ffmpeg, capture_pil, tmp_path):
+        """timestamp=0 is a valid seek (frame 0), not 'no timestamp'."""
+        screenshot("in.mp4", str(tmp_path / "shot.png"), timestamp=0)
+        assert "-ss" in capture_ffmpeg[0]
+
+    def test_no_frame_produced_raises(self, capture_pil, tmp_path, monkeypatch):
+        """Seeking past EOF makes ffmpeg exit 0 with no output; that must surface
+        as FfmpegError, not a silent success (png) or a cryptic PIL error (jpg)."""
+        monkeypatch.setattr("vidtools.video_ops.run_ffmpeg", lambda cmd: None)
+        with pytest.raises(FfmpegError, match="No frame"):
+            screenshot("in.mp4", str(tmp_path / "shot.png"), timestamp="99999")
+
+    def test_jpg_routes_through_pil_from_temp_png(self, capture_ffmpeg, capture_pil):
+        screenshot("in.mp4", "shot.jpg", quality=90)
+        assert capture_ffmpeg[0][-1].endswith(".png")  # grabbed lossless first
+        assert len(capture_pil) == 1
+        src, dst, quality = capture_pil[0]
+        assert src.endswith(".png")
+        assert dst == "shot.jpg"
+        assert quality == 90
+
+    def test_webp_routes_through_pil(self, capture_ffmpeg, capture_pil):
+        screenshot("in.mp4", "shot.webp")
+        assert capture_ffmpeg[0][-1].endswith(".png")
+        assert capture_pil[0][1] == "shot.webp"

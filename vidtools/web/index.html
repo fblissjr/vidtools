@@ -86,6 +86,7 @@
               <option value="resize">Resize</option>
               <option value="convert">Convert</option>
               <option value="cut">Cut / Trim</option>
+              <option value="screenshot">Screenshot (grab frame)</option>
               <option value="extract-audio">Extract Audio</option>
               <option value="crop">Crop</option>
               <option value="rotate">Rotate</option>
@@ -129,6 +130,32 @@
             </div>
             <label class="checkbox-label">
               <input type="checkbox" id="cut-copy" checked> Fast mode (no re-encode)
+            </label>
+          </div>
+
+          <div id="params-screenshot" class="op-params" hidden>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Timestamp</label>
+                <input type="text" id="shot-at" placeholder="00:00:05">
+                <span class="hint">e.g. 00:01:30, 90, or 90.5. Blank = first frame</span>
+              </div>
+              <div class="form-group">
+                <label>Format</label>
+                <select id="shot-format">
+                  <option value="png">PNG (lossless)</option>
+                  <option value="jpg">JPG</option>
+                  <option value="webp">WebP</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Quality</label>
+              <input type="number" id="shot-quality" placeholder="95" min="1" max="100" value="95">
+              <span class="hint">1-100 for jpg/webp (higher = better). Ignored for PNG</span>
+            </div>
+            <label class="checkbox-label">
+              <input type="checkbox" id="shot-accurate"> Frame-accurate (slower)
             </label>
           </div>
 

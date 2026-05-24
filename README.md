@@ -51,6 +51,7 @@ vidtools cut in.mp4 out.mp4 --start 40 --duration 26.5 --accurate
 vidtools convert in.mp4 out.gif                     # GIF with palette generation
 vidtools extract-audio in.mp4 out.mp3
 vidtools extract-frames in.mp4 'frame_%04d.jpg' -r 1
+vidtools screenshot in.mp4 shot.png --at 00:01:30          # single high-quality frame (png/jpg/webp)
 vidtools concat a.mp4 b.mp4 c.mp4 -o combined.mp4
 vidtools rotate in.mp4 out.mp4 -r 90
 vidtools subtitles in.mp4 out.mp4 -s subs.srt
@@ -246,7 +247,7 @@ deploy/
   setup.sh           # Ubuntu deployment script
   vidtools.service   # systemd unit file (hardened)
 data/                # Uploads, output, temp, SQLite DB — gitignored except .gitkeep
-tests/               # 11 files, ~176 tests (run: uv run pytest tests/ -v)
+tests/               # 12 files, ~243 tests (run: uv run pytest tests/ -v)
 ```
 
 ## Tests
@@ -255,4 +256,4 @@ tests/               # 11 files, ~176 tests (run: uv run pytest tests/ -v)
 uv run pytest tests/ -v
 ```
 
-176 tests across security, jobs, operations, video/image/audio ops, ytdlp, server, dispatch, progress, db, and pipeline.
+243 tests across security, jobs, operations, video/image/audio ops, ytdlp, server, dispatch, progress, db, pipeline, and separation.

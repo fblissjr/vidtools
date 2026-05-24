@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0
+
+### Added
+- **`screenshot`**: grab a single high-quality still frame from a video at a timestamp. `vidtools screenshot in.mp4 shot.png --at 00:01:30`. Output format is inferred from the extension (`.png`/`.jpg`/`.webp`). PNG is lossless; jpg/webp re-encode via PIL with `--quality` (1-100, higher = better). `--accurate` decodes to the exact frame (slower) instead of the default fast keyframe seek.
+- ffmpeg extracts the frame (to a lossless PNG for lossy targets); PIL handles jpg/webp encoding so the quality scale stays consistent and webp works even when ffmpeg is built without libwebp.
+- Exposed on the web UI as the `screenshot` op (timestamp/format/quality/accurate), reachable from the mobile-first dropdown.
+
 ## 0.10.0
 
 ### Added

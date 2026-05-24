@@ -263,6 +263,13 @@
           end: $("#cut-end").value || undefined,
           copy: $("#cut-copy").checked
         };
+      case "screenshot":
+        return {
+          timestamp: $("#shot-at").value || undefined,
+          format: $("#shot-format").value,
+          quality: parseInt($("#shot-quality").value) || 95,
+          accurate: $("#shot-accurate").checked
+        };
       case "extract-audio":
         return { format: $("#audio-format").value };
       case "crop":

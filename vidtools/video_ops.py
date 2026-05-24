@@ -11,6 +11,8 @@ import numpy as np
 import datetime
 
 from .utils import run_ffmpeg, logger
+from .progress import FfmpegError
+from .image_ops import convert_image
 from . import presets
 
 # --- Codec defaults ---
@@ -172,6 +174,54 @@ def extract_frames(input_file, output_pattern, frame_rate=1, image_format="image
     _add_time_range_args(command, start_time, end_time, duration)
     command.extend(["-r", str(frame_rate), "-f", image_format, output_pattern])
     run_ffmpeg(command)
+
+
+def _grab_frame(input_file, output_file, timestamp, accurate):
+    """Decode exactly one frame to `output_file`. Fast (keyframe) seek by default
+    via input `-ss`; `accurate=True` uses output `-ss` to decode to the precise
+    frame (slower on long inputs). The image2 muxer picks the encoder from the
+    output extension.
+
+    Seeking past the end of the input makes ffmpeg write zero frames and still
+    exit 0, so we verify a non-empty frame was produced and raise otherwise."""
+    has_seek = timestamp is not None and str(timestamp) != ""
+    command = ["ffmpeg", "-y"]
+    if has_seek and not accurate:
+        command.extend(["-ss", str(timestamp)])
+    command.extend(["-i", input_file])
+    if has_seek and accurate:
+        command.extend(["-ss", str(timestamp)])
+    command.extend(["-frames:v", "1", "-update", "1", output_file])
+    run_ffmpeg(command)
+    if not os.path.exists(output_file) or os.path.getsize(output_file) == 0:
+        raise FfmpegError(
+            f"No frame was produced at timestamp {timestamp!r}; "
+            "the timestamp may be past the end of the video."
+        )
+
+
+def screenshot(input_file, output_file, timestamp=None, quality=95, accurate=False):
+    """Grab a single still frame from a video at `timestamp` (e.g. "00:01:30",
+    "90", or seconds). Output format is inferred from `output_file`'s extension.
+
+    PNG is lossless and ignores `quality` (recommended for max fidelity). For
+    lossy formats (jpg/webp) ffmpeg first extracts a lossless PNG, then PIL
+    re-encodes with `quality` (1-100, higher = better) -- this keeps one
+    consistent quality scale and works even when ffmpeg lacks libwebp/mjpeg
+    quality control. `accurate=True` decodes to the exact frame (slower)."""
+    ext = os.path.splitext(output_file)[1].lower()
+    if ext in (".jpg", ".jpeg", ".webp"):
+        fd, tmp_png = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        try:
+            _grab_frame(input_file, tmp_png, timestamp, accurate)
+            convert_image(tmp_png, output_file, quality=quality)
+        finally:
+            if os.path.exists(tmp_png):
+                os.remove(tmp_png)
+    else:
+        _grab_frame(input_file, output_file, timestamp, accurate)
+    logger.info("Screenshot captured", output=output_file, timestamp=timestamp)
 
 
 def concatenate_videos(input_files, output_file, use_copy=True):

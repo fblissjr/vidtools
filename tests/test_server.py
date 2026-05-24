@@ -55,3 +55,37 @@ class TestServerFileRegistryIntegration:
             assert info["filename"] == "v.mp4"
         finally:
             db2.close()
+
+
+class TestScreenshotDispatch:
+    """The screenshot dispatch must derive the output extension from the
+    requested `format` (an image), not from the input video's suffix."""
+
+    def test_output_extension_from_format_param(self, monkeypatch):
+        from vidtools import server
+
+        captured = {}
+        def fake_screenshot(inp, out, **kwargs):
+            captured["input"] = inp
+            captured["output"] = out
+            captured["kwargs"] = kwargs
+        monkeypatch.setattr(server.operations, "screenshot", fake_screenshot)
+
+        result = server._dispatch_screenshot(
+            "/data/uploads/clip.mp4", "ignored.mp4",
+            {"format": "webp", "timestamp": "00:00:05", "quality": 80, "accurate": True},
+            output_id="abc123",
+        )
+
+        assert result.endswith(".webp")
+        assert "clip" in result
+        assert captured["output"] == result
+        assert captured["kwargs"] == {"timestamp": "00:00:05", "quality": 80, "accurate": True}
+
+    def test_defaults_to_png(self, monkeypatch):
+        from vidtools import server
+        monkeypatch.setattr(server.operations, "screenshot", lambda *a, **k: None)
+        result = server._dispatch_screenshot(
+            "/data/uploads/clip.mp4", "ignored.mp4", {}, output_id="abc123",
+        )
+        assert result.endswith(".png")

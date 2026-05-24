@@ -371,6 +371,45 @@ Examples:
                                   args.end_time, args.duration)
     extract_frames.set_defaults(func=_extract_frames)
 
+    # ---------------------------------------------------------------- screenshot
+    screenshot_p = subparsers.add_parser(
+        "screenshot",
+        help="Grab a single high-quality still frame at a timestamp",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description="""Grab one still frame from a video at a given timestamp.
+
+Output format comes from the output extension (.png/.jpg/.webp). PNG is
+lossless (best fidelity); jpg/webp re-encode via PIL with --quality.
+
+Examples:
+  # Lossless PNG two minutes in
+  vidtools screenshot in.mp4 shot.png --at 00:02:00
+
+  # High-quality JPEG at 90.5 seconds
+  vidtools screenshot in.mp4 shot.jpg --at 90.5 --quality 92
+
+  # Frame-accurate grab (decodes to the exact frame, slower)
+  vidtools screenshot in.mp4 shot.png --at 00:02:00 --accurate""",
+    )
+    screenshot_p.add_argument("input", type=lambda x: is_valid_file(screenshot_p, x))
+    screenshot_p.add_argument("output", help="Output image (.png/.jpg/.webp)")
+    screenshot_p.add_argument(
+        "--at", dest="timestamp", default=None,
+        help="Timestamp to grab (e.g. 00:01:30, 90, or 90.5). Default: first frame"
+    )
+    screenshot_p.add_argument(
+        "-q", "--quality", type=int, default=95,
+        help="Quality 1-100 for jpg/webp (higher = better). Ignored for PNG. Default: 95"
+    )
+    screenshot_p.add_argument(
+        "--accurate", action="store_true",
+        help="Decode to the exact frame (slower; default uses fast keyframe seek)"
+    )
+    def _screenshot(args):
+        operations.screenshot(args.input, args.output, timestamp=args.timestamp,
+                              quality=args.quality, accurate=args.accurate)
+    screenshot_p.set_defaults(func=_screenshot)
+
     # ---------------------------------------------------------------- concat ---
     concat = subparsers.add_parser(
         "concat",

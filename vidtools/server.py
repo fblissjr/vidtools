@@ -419,6 +419,21 @@ def _dispatch_extract_audio(input_path, output_path, params, **ctx):
                              audio_format=params.get("audio_codec", "copy"))
     return output_path
 
+_SCREENSHOT_PARAMS = ("timestamp", "quality", "accurate")
+
+
+def _dispatch_screenshot(input_path, output_path, params, **ctx):
+    """Grab a single still frame. Output is an image; its extension is the
+    requested `format` (default png), not the input's. Operation params are
+    forwarded via _passthrough so screenshot()'s own defaults win."""
+    out_ext = params.get("format", "png")
+    input_name = Path(input_path).stem
+    safe_out = sanitize_filename(f"{input_name}.{out_ext}")
+    output_path = str(OUTPUT_DIR / f"{ctx['output_id']}_{safe_out}")
+    operations.screenshot(input_path, output_path,
+                          **_passthrough(params, _SCREENSHOT_PARAMS))
+    return output_path
+
 def _dispatch_crop(input_path, output_path, params, **_):
     operations.crop_video(input_path, output_path, width=params["width"], height=params["height"],
                           x=params.get("x", 0), y=params.get("y", 0))
@@ -499,6 +514,7 @@ _OP_DISPATCH = {
     "convert": _dispatch_convert,
     "cut": _dispatch_cut,
     "extract-audio": _dispatch_extract_audio,
+    "screenshot": _dispatch_screenshot,
     "crop": _dispatch_crop,
     "rotate": _dispatch_rotate,
     "concat": _dispatch_concat,

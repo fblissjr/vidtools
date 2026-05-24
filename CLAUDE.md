@@ -91,7 +91,7 @@ uv run uvicorn vidtools.server:app --host 0.0.0.0 --port 8910
 uv run pytest tests/ -v
 ```
 
-12 test files, ~217 tests: security, jobs, operations, ytdlp, server, audio_ops, image_ops, dispatch, progress, db, pipeline, separation.
+12 test files, ~243 tests: security, jobs, operations, ytdlp, server, audio_ops, image_ops, dispatch, progress, db, pipeline, separation.
 
 ### Generate a test video for manual verification
 
@@ -139,6 +139,7 @@ The `dl-live` CLI command and `ytdlp-live` web op record YouTube/HLS live broadc
 - Replaced deprecated `-async 1` with `-af aresample=async=1`.
 - Hardware acceleration: `--hwaccel` flag uses VideoToolbox on macOS (h264_videotoolbox / hevc_videotoolbox).
 - Modern codec presets available: `hevc_quality` (libx265), `av1_quality` (libaom-av1).
+- Single-frame grab (`screenshot`): ffmpeg extracts one lossless frame via `_grab_frame`; PIL re-encodes jpg/webp through `image_ops.convert_image` (one quality scale 1-100, and works even when ffmpeg is built without libwebp). Fast input `-ss` by default, output `-ss` for `--accurate`. **Gotcha:** when `-ss` overshoots the input, ffmpeg's image2 muxer writes zero frames and still exits 0, so `_grab_frame` verifies a non-empty file was produced and raises `FfmpegError` otherwise (without this, png grabs silently produce nothing and lossy grabs raise a cryptic PIL error).
 - Always work with the latest ffmpeg documentation and features.
 
 ## Versioning
