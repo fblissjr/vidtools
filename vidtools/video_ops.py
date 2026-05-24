@@ -13,6 +13,7 @@ import datetime
 from .utils import run_ffmpeg, logger
 from .progress import FfmpegError
 from .image_ops import convert_image
+from .audio_ops import AUDIO_CODEC_MAP, _auto_codec
 from . import presets
 
 # --- Codec defaults ---
@@ -133,7 +134,20 @@ def convert_format(input_file, output_file, format_type, video_codec=None, audio
     if end_time: command.extend(["-to", str(end_time)])
     if duration: command.extend(["-t", str(duration)])
 
-    if use_copy:
+    out_ext = os.path.splitext(output_file)[1].lstrip(".").lower()
+    audio_only = out_ext in AUDIO_CODEC_MAP
+
+    if audio_only:
+        # The output container holds no video stream (e.g. mp4 -> mp3). Drop
+        # video and pick the codec the container actually accepts; emitting
+        # `-c:v libx264 -c:a aac` into an .mp3 muxer fails ("Nothing was written").
+        command.append("-vn")
+        if use_copy:
+            command.extend(["-c:a", "copy"])
+        else:
+            command.extend(["-c:a", _auto_codec(output_file, audio_codec)])
+            if audio_bitrate: command.extend(["-b:a", audio_bitrate])
+    elif use_copy:
         command.extend(["-c", "copy"])
     elif format_type == "gif":
         command.extend(["-vf", "fps=10,scale=320:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"])

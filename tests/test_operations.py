@@ -14,6 +14,7 @@ from vidtools.operations import (
     sanitize_video,
     trim_to_audio,
     screenshot,
+    convert_format,
 )
 
 
@@ -496,3 +497,48 @@ class TestScreenshot:
         screenshot("in.mp4", "shot.webp")
         assert capture_ffmpeg[0][-1].endswith(".png")
         assert capture_pil[0][1] == "shot.webp"
+
+
+class TestConvertFormatAudioOnly:
+    """`vidtools convert video.mp4 out.mp3` routes a video INPUT to convert_format
+    (smart dispatch keys on input kind). An audio-only OUTPUT container can't hold
+    a video stream, so convert_format must drop video and pick the right audio
+    codec instead of emitting `-c:v libx264 -c:a aac` into an .mp3 muxer."""
+
+    @pytest.fixture()
+    def capture_ffmpeg(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr("vidtools.video_ops.run_ffmpeg",
+                            lambda cmd: calls.append(list(cmd)))
+        return calls
+
+    def test_video_to_mp3_drops_video_and_uses_lame(self, capture_ffmpeg):
+        convert_format("in.mp4", "out.mp3", "mp3")
+        cmd = capture_ffmpeg[0]
+        assert "-vn" in cmd
+        assert "-c:v" not in cmd            # no video encoder into an audio container
+        assert cmd[cmd.index("-c:a") + 1] == "libmp3lame"
+        assert "-crf" not in cmd
+
+    def test_video_to_wav_uses_pcm(self, capture_ffmpeg):
+        convert_format("in.mov", "out.wav", "wav")
+        cmd = capture_ffmpeg[0]
+        assert "-vn" in cmd
+        assert cmd[cmd.index("-c:a") + 1] == "pcm_s16le"
+
+    def test_audio_bitrate_forwarded(self, capture_ffmpeg):
+        convert_format("in.mp4", "out.mp3", "mp3", audio_bitrate="320k")
+        cmd = capture_ffmpeg[0]
+        assert cmd[cmd.index("-b:a") + 1] == "320k"
+
+    def test_time_range_preserved_for_audio_output(self, capture_ffmpeg):
+        convert_format("in.mp4", "out.mp3", "mp3", start_time="10", end_time="20")
+        cmd = capture_ffmpeg[0]
+        assert "-ss" in cmd and "-to" in cmd
+        assert "-vn" in cmd
+
+    def test_video_to_video_still_encodes_video(self, capture_ffmpeg):
+        convert_format("in.mov", "out.mp4", "mp4")
+        cmd = capture_ffmpeg[0]
+        assert "-c:v" in cmd
+        assert "-vn" not in cmd

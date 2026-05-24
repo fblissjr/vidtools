@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.1
+
+### Fixed
+- `convert` with an audio-only output (e.g. `vidtools convert video.mp4 out.mp3`) no longer fails with "Nothing was written into output file". `convert_format` now detects an audio-only output container (via the shared `AUDIO_CODEC_MAP`), drops the video stream with `-vn`, and selects the correct codec (`libmp3lame`, `pcm_s16le`, etc.) instead of forcing `-c:v libx264 -c:a aac` into the audio muxer. Time-range flags are preserved. Fixes both the CLI and the web `convert` dispatch.
+
 ## 0.11.0
 
 ### Added
