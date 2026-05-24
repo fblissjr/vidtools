@@ -259,7 +259,12 @@ def concatenate_videos(input_files, output_file, use_copy=True):
 
 
 def crop_video(input_file, output_file, width, height, x, y):
-    """Crops a video."""
+    """Crops a video. ffmpeg fails late on an out-of-bounds region, so reject
+    obviously invalid geometry up front (parity with crop_image)."""
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Crop width/height must be positive, got {width}x{height}")
+    if x < 0 or y < 0:
+        raise ValueError(f"Crop offset must be non-negative, got x={x} y={y}")
     command = ["ffmpeg", "-y", "-i", input_file, "-vf", f"crop={width}:{height}:{x}:{y}", output_file]
     run_ffmpeg(command)
 

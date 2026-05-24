@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.0
+
+### Changed (breaking: CLI command surface unified)
+- **One verb per concept; media-prefixed commands removed.** The `img-*` and `audio-*` command families are gone. Every operation is now a top-level verb. Multi-media verbs auto-detect the input type: `info`, `convert`, `resize`, `crop`, `trim`, `rotate` all work on whatever you hand them (video/audio/image as applicable) without you choosing a variant.
+- **`cut` → `trim`** (canonical), with `cut` kept as an alias. `trim` works on both video and audio.
+- **`trim-to-audio` → `match-duration`** (clearer, and out of the "trim" namespace).
+- Audio ops dropped their prefix: `audio-normalize`→`normalize`, `audio-fade`→`fade`, `audio-resample`→`resample`, `audio-clean`→`clean`, `audio-separate`→`separate`, `audio-convert`/`audio-cut`/`audio-info` folded into `convert`/`trim`/`info`.
+- Image ops dropped their prefix: `img-thumb`→`thumbnail`, `img-strip-exif`→`strip-metadata`, `img-optimize`→`optimize`, `img-adjust`→`adjust`, `img-resize`/`img-convert`/`img-crop`/`img-info` folded into `resize`/`convert`/`crop`/`info`.
+- **Unified `--quality` (1-100, higher = better)** on `convert`, mapped per media (video→CRF, image→PIL quality, audio→bitrate). Power-user overrides `--crf` (video) and `--bitrate` (audio) still win. Removed the old hack where `--crf` was reinterpreted as image quality.
+- Consistent flag names: `--video-codec`/`--audio-codec` everywhere (dropped `--vcodec`/`--acodec`/`--codec`); `--start`/`--end`/`--duration` for all time ranges. `trim` dropped the vestigial `--copy` flag (default is stream-copy; `--accurate` re-encodes) and the duplicate `-to`/`--to`.
+- `rotate` now works on images too (any angle), not just video.
+- Web UI + API op keys renamed to match (`cut`→`trim`, `trim-to-audio`→`match-duration`, `audio-clean`→`clean`, `audio-separate`→`separate`).
+
+### Fixed
+- `crop` on video now validates geometry (positive W/H, non-negative offsets) and raises `ValueError`, matching the image path (previously ffmpeg failed late/opaquely).
+- README no longer documents the non-existent `video-resize`/`video-convert`/`video-cut` commands.
+
 ## 0.11.1
 
 ### Fixed

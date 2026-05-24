@@ -1,7 +1,10 @@
 """Tests for input-type smart dispatch."""
 import pytest
 from unittest.mock import MagicMock
-from vidtools.cli import _detect_kind, _make_smart, VIDEO_EXTS, AUDIO_EXTS, IMAGE_EXTS
+from vidtools.cli import (
+    _detect_kind, _make_smart, VIDEO_EXTS, AUDIO_EXTS, IMAGE_EXTS,
+    _quality_to_crf, _quality_to_audio_bitrate, setup_argparse,
+)
 
 
 class TestDetectKind:
@@ -25,8 +28,11 @@ class TestDetectKind:
     def test_unknown_extension_raises(self):
         with pytest.raises(SystemExit) as exc:
             _detect_kind("file.xyz")
-        assert "xyz" in str(exc.value)
-        assert "explicit" in str(exc.value).lower() or "img-" in str(exc.value)
+        msg = str(exc.value)
+        assert "xyz" in msg
+        # Message should be actionable: it lists the supported extensions.
+        assert "supported" in msg.lower()
+        assert ".mp4" in msg and ".mp3" in msg and ".png" in msg
 
     def test_no_extension_raises(self):
         with pytest.raises(SystemExit):
@@ -87,3 +93,59 @@ class TestMakeSmart:
             dispatcher(args)
         assert "image" in str(exc.value)
         assert "test" in str(exc.value)
+
+
+class TestQualityMapping:
+    """Unified 1-100 quality knob maps to per-codec controls (higher = better)."""
+
+    def test_crf_monotonic_higher_quality_lower_crf(self):
+        assert _quality_to_crf(100) < _quality_to_crf(50) < _quality_to_crf(1)
+
+    def test_crf_in_practical_band(self):
+        # 100 -> near-lossless but sane; never below 0 or above 51.
+        assert 0 <= _quality_to_crf(100) <= 20
+        assert _quality_to_crf(1) <= 51
+
+    def test_crf_clamps_out_of_range(self):
+        assert _quality_to_crf(9999) == _quality_to_crf(100)
+        assert _quality_to_crf(-5) == _quality_to_crf(1)
+
+    def test_audio_bitrate_monotonic(self):
+        def k(q):
+            return int(_quality_to_audio_bitrate(q).rstrip("k"))
+        assert k(95) >= k(70) >= k(50) >= k(30) >= k(10)
+
+    def test_audio_bitrate_top_is_320(self):
+        assert _quality_to_audio_bitrate(100) == "320k"
+
+
+class TestUnifiedCommandSurface:
+    """The reorg exposes one verb per concept, no img-/audio- prefixes."""
+
+    def _commands(self):
+        parser = setup_argparse()
+        # The subparsers action is the one with choices.
+        for action in parser._actions:
+            if getattr(action, "choices", None) and "convert" in action.choices:
+                return set(action.choices)
+        raise AssertionError("subparsers not found")
+
+    def test_unified_verbs_present(self):
+        cmds = self._commands()
+        for verb in ["info", "convert", "resize", "crop", "trim", "rotate",
+                     "normalize", "fade", "resample", "clean", "separate",
+                     "thumbnail", "strip-metadata", "optimize", "adjust",
+                     "screenshot", "match-duration"]:
+            assert verb in cmds, f"missing unified verb: {verb}"
+
+    def test_cut_is_alias_of_trim(self):
+        # argparse exposes aliases as additional choices pointing at the same parser.
+        cmds = self._commands()
+        assert "cut" in cmds and "trim" in cmds
+
+    def test_old_prefixed_commands_removed(self):
+        cmds = self._commands()
+        for gone in ["img-resize", "img-convert", "img-crop", "img-info",
+                     "audio-cut", "audio-convert", "audio-normalize", "audio-info",
+                     "trim-to-audio"]:
+            assert gone not in cmds, f"prefixed command should be removed: {gone}"

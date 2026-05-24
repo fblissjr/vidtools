@@ -2,12 +2,12 @@
 invocation. Faster than sequential temp files and avoids quality loss from
 multiple re-encode passes.
 
-v1 supports: cut (input/output time args), resize, crop, rotate, sanitize,
+v1 supports: trim/cut (input/output time args), resize, crop, rotate, sanitize,
 subtitles (filter chain), and convert (terminal codec/quality).
 
 Excluded: concat (multiple inputs), slideshow (its own pipeline),
 extract-audio/extract-frames (different output type), add-audio (multiple
-inputs), apply-preset (already a recipe), all img-* and audio-* operations.
+inputs), preset (already a recipe), and audio/image-only operations.
 """
 
 from dataclasses import dataclass

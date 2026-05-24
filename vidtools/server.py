@@ -512,7 +512,7 @@ def _dispatch_trim_to_audio(input_path, output_path, params, **_):
 _OP_DISPATCH = {
     "resize": _dispatch_resize,
     "convert": _dispatch_convert,
-    "cut": _dispatch_cut,
+    "trim": _dispatch_cut,
     "extract-audio": _dispatch_extract_audio,
     "screenshot": _dispatch_screenshot,
     "crop": _dispatch_crop,
@@ -520,9 +520,9 @@ _OP_DISPATCH = {
     "concat": _dispatch_concat,
     "add-audio": _dispatch_add_audio,
     "preset": _dispatch_preset,
-    "trim-to-audio": _dispatch_trim_to_audio,
-    "audio-clean": _dispatch_clean_audio,
-    "audio-separate": _dispatch_audio_separate,
+    "match-duration": _dispatch_trim_to_audio,
+    "clean": _dispatch_clean_audio,
+    "separate": _dispatch_audio_separate,
 }
 
 

@@ -26,66 +26,66 @@ On first visit to the web UI, you'll set a password. After that, all access requ
 
 ## CLI
 
-The CLI auto-detects input type from file extension for common operations. `vidtools resize file.mp4` uses ffmpeg; `vidtools resize file.png` uses PIL.
+One verb per concept. Shape: `vidtools <operation> [params] [--format] [power-user flags] <input> <output>`.
 
-### Smart commands (auto-route by input type)
+The common verbs auto-detect the input type from its extension and do the right thing — you don't pick audio vs video vs image. `vidtools resize photo.png` uses PIL; `vidtools resize clip.mp4` uses ffmpeg; same command.
+
+### Universal commands (auto-detect input type)
 
 ```bash
-vidtools info file.{mp4,png,mp3}                    # video, image, or audio info
-vidtools resize file.mp4 out.mp4 -p 0.5             # video resize
-vidtools resize file.png out.png -p 0.5             # image resize
-vidtools convert in.wav out.mp3                     # audio convert
-vidtools convert in.avi out.mp4                     # video convert
-vidtools crop in.png out.png -W 200 -H 200 -x 50 -y 50
-vidtools cut in.mp4 out.mp4 --start 60 --end 90     # video cut
-vidtools cut in.mp3 out.mp3 --start 0 --end 30      # audio cut
+vidtools info file.{mp4,png,mp3}                       # video, image, or audio info
+vidtools convert in.avi out.mp4                        # video convert
+vidtools convert in.wav out.mp3                         # audio convert
+vidtools convert clip.mp4 audio.mp3                     # video -> extract audio
+vidtools convert photo.png photo.webp -q 90            # image convert (quality 1-100)
+vidtools resize clip.mp4 out.mp4 -p 0.5                # video or image
+vidtools resize photo.png small.png -W 800
+vidtools crop in.png out.png -W 200 -H 200 -x 50 -y 50 # video or image
+vidtools trim --start 60 --end 90 in.mp4 out.mp4       # video or audio (alias: cut)
+vidtools trim --start 0 --end 30 song.mp3 clip.mp3
+vidtools rotate -r 90 clip.mp4 out.mp4                 # video: 90/180/270/-90
+vidtools rotate -r 45 photo.png out.png               # image: any angle
 ```
 
-For full video-specific flags (`--algorithm`, `--vcodec`, `--accurate`, `--hwaccel`, etc.) use the explicit prefixes: `vidtools video-resize`, `video-convert`, `video-cut`. Image-only ops use `img-*`; audio-only use `audio-*`.
+`--quality` is a unified 1-100 knob (higher = better) on `convert`; power users can still pass `--crf` (video) or `--bitrate` (audio) to override. Video-specific power-user flags (`--algorithm`, `--video-codec`, `--accurate`, `--hwaccel`, ...) are accepted by the same verbs when the input is a video.
 
-### Video commands
+### Video-only commands
 
 ```bash
-vidtools cut in.mp4 out.mp4 --start 00:00:40 --end 00:01:06.500
-vidtools cut in.mp4 out.mp4 --start 40 --duration 26.5 --accurate
-vidtools convert in.mp4 out.gif                     # GIF with palette generation
+vidtools convert in.mp4 out.gif                       # GIF with palette generation
 vidtools extract-audio in.mp4 out.mp3
 vidtools extract-frames in.mp4 'frame_%04d.jpg' -r 1
-vidtools screenshot in.mp4 shot.png --at 00:01:30          # single high-quality frame (png/jpg/webp)
+vidtools screenshot --at 00:01:30 in.mp4 shot.png     # single high-quality frame (png/jpg/webp)
 vidtools concat a.mp4 b.mp4 c.mp4 -o combined.mp4
-vidtools rotate in.mp4 out.mp4 -r 90
-vidtools subtitles in.mp4 out.mp4 -s subs.srt
-vidtools sanitize in.mp4 out.mp4                    # auto-crop, noise, strip metadata
-vidtools slideshow 'images/*.png' out.mp4 --size 1920x1080 --resize-mode pad
-vidtools add-audio video.mp4 music.mp3 out.mp4 --mix --volume 0.3
-vidtools trim-to-audio in.mp4 out.mp4 --buffer 0.5   # match video duration to audio + buffer
+vidtools subtitles -s subs.srt in.mp4 out.mp4
+vidtools sanitize in.mp4 out.mp4                      # auto-crop, noise, strip metadata
+vidtools slideshow --size 1920x1080 --resize-mode pad 'images/*.png' out.mp4
+vidtools add-audio --mix --volume 0.3 video.mp4 music.mp3 out.mp4
+vidtools match-duration --buffer 0.5 in.mp4 out.mp4   # trim video to its audio length + buffer
 vidtools srt-from-transcript transcript.txt out.srt
 ```
 
-### Image commands (PIL)
+### Image-only commands (PIL)
 
 ```bash
-vidtools img-resize in.png out.png -p 0.5
-vidtools img-convert in.png out.webp -q 85
-vidtools img-crop in.png out.png -W 500 -H 500 -x 100 -y 100
-vidtools img-thumb in.png thumb.png -s 256
-vidtools img-strip-exif in.jpg clean.jpg
-vidtools img-optimize in.png small.jpg -q 80 --max-width 1920
-vidtools img-adjust in.png out.png --brightness 1.2 --contrast 1.1 --rotation 90 --flip horizontal
-vidtools img-info file.png
+vidtools thumbnail -s 256 in.png thumb.png
+vidtools strip-metadata in.jpg clean.jpg
+vidtools optimize -q 80 --max-width 1920 in.png small.jpg
+vidtools adjust --brightness 1.2 --contrast 1.1 --rotation 90 --flip horizontal in.png out.png
 ```
 
-### Audio commands (FFmpeg)
+(For image resize/convert/crop/rotate/info, use the universal verbs above.)
+
+### Audio-only commands (FFmpeg)
 
 ```bash
-vidtools audio-convert in.wav out.mp3 --bitrate 320k
-vidtools audio-cut in.mp3 out.mp3 --start 60 --end 90
-vidtools audio-normalize in.mp3 out.mp3 --target -16   # LUFS, two-pass loudnorm
-vidtools audio-fade in.mp3 out.mp3 --fade-in 3 --fade-out 3 --total-duration 60
-vidtools audio-resample in.mp3 out.mp3 -r 22050
-vidtools audio-clean in.mp3 out.mp3                    # highpass + denoise + compress + loudnorm
-vidtools audio-info file.mp3
+vidtools normalize --target -16 in.mp3 out.mp3        # LUFS, two-pass loudnorm
+vidtools fade --fade-in 3 --fade-out 3 --total-duration 60 in.mp3 out.mp3
+vidtools resample -r 22050 in.mp3 out.mp3
+vidtools clean in.mp3 out.mp3                          # highpass + denoise + compress + loudnorm
 ```
+
+(For audio convert/trim/info, use the universal verbs above.)
 
 ### Audio source separation (optional)
 
@@ -94,9 +94,9 @@ Splits a track into stems (vocals/instrumental, or 4-stem) using mel-band roform
 ```bash
 uv sync --extra separation              # one-time install of torch + onnxruntime + librosa
 
-vidtools audio-separate --list                                                   # list available models
-vidtools audio-separate song.mp3 mel_band_roformer_kim_FT_by_aname-tommy.ckpt ./stems/
-vidtools audio-separate song.mp3 htdemucs_ft.yaml ./stems/                       # 4-stem
+vidtools separate --list                                                         # list available models
+vidtools separate song.mp3 mel_band_roformer_kim_FT_by_aname-tommy.ckpt ./stems/
+vidtools separate song.mp3 htdemucs_ft.yaml ./stems/                             # 4-stem
 ```
 
 Models auto-download to the audio-separator cache on first use. The backend is swappable (`vidtools.separation.SeparationBackend` Protocol) so a future MLX-native implementation can replace the inference engine without changing the CLI.
@@ -105,12 +105,12 @@ Models auto-download to the audio-separator cache on first use. The backend is s
 
 ```bash
 vidtools pipeline in.mp4 out.mp4 \
-    cut --start 60 --end 90 \
+    trim --start 60 --end 90 \
     resize -p 0.5 \
     convert --crf 20
 ```
 
-3-5x faster than running separate commands; no intermediate files; no compounding quality loss. Supports cut, resize, crop, rotate, sanitize, subtitles, convert. Excludes multi-input or different-output ops (concat, slideshow, extract-*, add-audio, preset).
+3-5x faster than running separate commands; no intermediate files; no compounding quality loss. Supports trim (alias cut), resize, crop, rotate, sanitize, subtitles, convert. Excludes multi-input or different-output ops (concat, slideshow, extract-*, add-audio, preset).
 
 ### Presets
 
@@ -247,7 +247,7 @@ deploy/
   setup.sh           # Ubuntu deployment script
   vidtools.service   # systemd unit file (hardened)
 data/                # Uploads, output, temp, SQLite DB — gitignored except .gitkeep
-tests/               # 12 files, ~243 tests (run: uv run pytest tests/ -v)
+tests/               # 12 files, ~256 tests (run: uv run pytest tests/ -v)
 ```
 
 ## Tests
@@ -256,4 +256,4 @@ tests/               # 12 files, ~243 tests (run: uv run pytest tests/ -v)
 uv run pytest tests/ -v
 ```
 
-243 tests across security, jobs, operations, video/image/audio ops, ytdlp, server, dispatch, progress, db, pipeline, and separation.
+256 tests across security, jobs, operations, video/image/audio ops, ytdlp, server, dispatch, progress, db, pipeline, and separation.

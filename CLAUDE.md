@@ -55,8 +55,8 @@ Modules under `vidtools/`:
 4. **Error Handling**: operations raise `FfmpegError` / `ValueError`. Server catches → job FAILED. CLI catches in `main()` → exit 1.
 5. **State Persistence**: `data/vidtools.db` (SQLite WAL). `*.db-wal`/`*.db-shm` gitignored via `data/*` rule. One-time migration of legacy `file_registry.json` runs on first startup, file renamed to `.json.migrated`.
 6. **Crash Recovery**: at startup, `JobStore.fail_unfinished()` marks RUNNING/QUEUED jobs as FAILED with `error="Server restart"`. `FileRegistry.prune_missing()` removes registry entries for deleted files (single batched DELETE).
-7. **Smart Dispatch**: `vidtools resize file.png` and `vidtools resize file.mp4` both work. `_detect_kind(path)` classifies by extension; `.gif` is video. Smart commands: `info`, `crop`, `resize`, `convert`, `cut`. Image-only ops still use `img-*` prefix; audio-only use `audio-*`.
-8. **Pipelines**: `vidtools pipeline in.mp4 out.mp4 cut --start 60 --end 90 resize -p 0.5 convert --crf 20`. Single ffmpeg invocation. Video only.
+7. **Unified verbs + Smart Dispatch**: one verb per concept, no `img-`/`audio-` prefixes (removed in 0.12.0). Multi-media verbs auto-detect input kind via `_detect_kind(path)` (`.gif` is video) and route through `_make_smart`: `info`, `convert`, `resize`, `crop`, `trim` (alias `cut`), `rotate`. Single-media verbs are top-level too: audio = `normalize`/`fade`/`resample`/`clean`/`separate`; image = `thumbnail`/`strip-metadata`/`optimize`/`adjust`; video = `screenshot`/`extract-audio`/`extract-frames`/`concat`/`subtitles`/`sanitize`/`slideshow`/`add-audio`/`match-duration`/`srt-from-transcript`/`dl-live`. `convert` takes a unified `--quality` (1-100) mapped per media (`_quality_to_crf`/`_quality_to_audio_bitrate` in cli.py), with `--crf`/`--bitrate` overrides.
+8. **Pipelines**: `vidtools pipeline in.mp4 out.mp4 trim --start 60 --end 90 resize -p 0.5 convert --crf 20`. Single ffmpeg invocation. Video only. `trim` and `cut` both map to the internal `cut` step.
 9. **Authentication**: bcrypt password in `~/.config/vidtools/config.json`, JWT in httponly cookie.
 
 ## Common tasks
@@ -66,17 +66,19 @@ Modules under `vidtools/`:
 ```bash
 uv run vidtools <command> [options]
 
-# Smart dispatch (auto-detects type from input extension)
+# Universal verbs auto-detect type from input extension (no img-/audio- prefixes)
 vidtools info file.{mp4,png,mp3}
 vidtools resize file.mp4 out.mp4 -p 0.5
 vidtools resize file.png out.png -p 0.5
+vidtools convert in.wav out.mp3                      # audio convert
+vidtools trim --start 60 --end 90 song.mp3 clip.mp3  # alias: cut
 
-# Explicit prefixes (for full image/audio flag sets)
-vidtools img-resize in.png out.png -p 0.5
-vidtools audio-convert in.wav out.mp3 --bitrate 320k
+# Single-media verbs are also top-level (no prefix)
+vidtools normalize in.mp3 out.mp3 --target -16
+vidtools thumbnail -s 256 in.png thumb.png
 
 # Pipelines
-vidtools pipeline in.mp4 out.mp4 cut --start 60 --end 90 resize -p 0.5 convert --crf 20
+vidtools pipeline in.mp4 out.mp4 trim --start 60 --end 90 resize -p 0.5 convert --crf 20
 ```
 
 ### Run the web server
@@ -91,7 +93,7 @@ uv run uvicorn vidtools.server:app --host 0.0.0.0 --port 8910
 uv run pytest tests/ -v
 ```
 
-12 test files, ~243 tests: security, jobs, operations, ytdlp, server, audio_ops, image_ops, dispatch, progress, db, pipeline, separation.
+12 test files, ~256 tests: security, jobs, operations, ytdlp, server, audio_ops, image_ops, dispatch, progress, db, pipeline, separation.
 
 ### Generate a test video for manual verification
 

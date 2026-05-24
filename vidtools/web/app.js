@@ -257,11 +257,11 @@
         return { percentage: parseFloat($("#resize-pct").value) / 100 || 0.5 };
       case "convert":
         return { format: $("#convert-format").value };
-      case "cut":
+      case "trim":
         return {
-          start: $("#cut-start").value || undefined,
-          end: $("#cut-end").value || undefined,
-          copy: $("#cut-copy").checked
+          start: $("#trim-start").value || undefined,
+          end: $("#trim-end").value || undefined,
+          copy: $("#trim-copy").checked
         };
       case "screenshot":
         return {
