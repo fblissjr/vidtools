@@ -42,9 +42,12 @@ def convert_image(input_file: str, output_file: str, quality: int = 85):
         # Convert to RGB if saving to JPEG (no alpha channel)
         if output_file.lower().endswith((".jpg", ".jpeg")) and img.mode in ("RGBA", "P", "LA"):
             img = img.convert("RGB")
-        save_kwargs = {}
+        save_kwargs: dict[str, object] = {}
         if output_file.lower().endswith((".jpg", ".jpeg", ".webp")):
             save_kwargs["quality"] = quality
+        # WebP at the top of the scale means lossless (matches "higher = better").
+        if output_file.lower().endswith(".webp") and quality >= 100:
+            save_kwargs["lossless"] = True
         if output_file.lower().endswith(".png"):
             save_kwargs["optimize"] = True
         img.save(output_file, **save_kwargs)

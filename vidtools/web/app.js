@@ -263,13 +263,15 @@
           end: $("#trim-end").value || undefined,
           copy: $("#trim-copy").checked
         };
-      case "screenshot":
+      case "screenshot": {
+        const q = parseInt($("#shot-quality").value, 10);
         return {
           timestamp: $("#shot-at").value || undefined,
           format: $("#shot-format").value,
-          quality: parseInt($("#shot-quality").value) || 95,
+          quality: Number.isNaN(q) ? 95 : q,
           accurate: $("#shot-accurate").checked
         };
+      }
       case "extract-audio":
         return { format: $("#audio-format").value };
       case "crop":

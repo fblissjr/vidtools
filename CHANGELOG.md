@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.13.0
+
+### Added
+- **Audio verbs now accept video inputs.** `normalize`, `fade`, `resample`, and `clean` work on a video: an audio output (e.g. `out.mp3`) extracts and processes the audio; a video output (e.g. `out.mp4`) processes the audio track and remuxes it back over the original video (video stream copied). So `vidtools normalize clip.mp4 out.mp4` fixes the audio and keeps the picture.
+
+### Changed
+- `--quality` → CRF mapping recentered so `--quality 50` lands on the x264 default CRF 23 (was ~28); 100 → 16 (near-lossless), 1 → ~30.
+- Pipeline `convert` step flags aligned with the top-level CLI: `--video-codec`/`--audio-codec`/`--video-bitrate`/`--audio-bitrate` (were `--vcodec`/`--acodec`/`--vbitrate`/`--abitrate`).
+
+### Fixed
+- `convert`/`screenshot` to WebP at `--quality 100` now writes a true lossless WebP (matches "higher = better").
+- Web UI quality field parsing uses an explicit radix and guards `NaN`.
+
 ## 0.12.0
 
 ### Changed (breaking: CLI command surface unified)

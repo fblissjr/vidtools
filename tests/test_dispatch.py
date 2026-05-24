@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 from vidtools.cli import (
     _detect_kind, _make_smart, VIDEO_EXTS, AUDIO_EXTS, IMAGE_EXTS,
     _quality_to_crf, _quality_to_audio_bitrate, setup_argparse,
+    _audio_verb, _parse_pipeline_steps,
 )
 
 
@@ -106,6 +107,10 @@ class TestQualityMapping:
         assert 0 <= _quality_to_crf(100) <= 20
         assert _quality_to_crf(1) <= 51
 
+    def test_crf_midpoint_is_x264_default(self):
+        # quality 50 should land on the x264 default CRF (23).
+        assert _quality_to_crf(50) == 23
+
     def test_crf_clamps_out_of_range(self):
         assert _quality_to_crf(9999) == _quality_to_crf(100)
         assert _quality_to_crf(-5) == _quality_to_crf(1)
@@ -149,3 +154,62 @@ class TestUnifiedCommandSurface:
                      "audio-cut", "audio-convert", "audio-normalize", "audio-info",
                      "trim-to-audio"]:
             assert gone not in cmds, f"prefixed command should be removed: {gone}"
+
+
+class TestAudioVerbVideoAware:
+    """Audio-processing verbs (normalize/fade/resample/clean) accept video inputs:
+    audio output runs directly; video output remuxes the processed audio back
+    over the original video."""
+
+    def _recorder(self):
+        calls = {"op": [], "add_audio": []}
+        def run_op(args, in_path, out_path):
+            calls["op"].append((in_path, out_path))
+        return calls, run_op
+
+    def test_audio_input_runs_directly(self, monkeypatch):
+        calls, run_op = self._recorder()
+        monkeypatch.setattr("vidtools.cli.operations.add_audio",
+                            lambda *a, **k: calls["add_audio"].append((a, k)))
+        args = MagicMock(); args.input = "song.mp3"; args.output = "out.mp3"
+        _audio_verb(run_op)(args)
+        assert calls["op"] == [("song.mp3", "out.mp3")]
+        assert calls["add_audio"] == []
+
+    def test_video_in_audio_out_runs_directly(self, monkeypatch):
+        calls, run_op = self._recorder()
+        monkeypatch.setattr("vidtools.cli.operations.add_audio",
+                            lambda *a, **k: calls["add_audio"].append((a, k)))
+        args = MagicMock(); args.input = "clip.mp4"; args.output = "out.mp3"
+        _audio_verb(run_op)(args)
+        assert calls["op"] == [("clip.mp4", "out.mp3")]
+        assert calls["add_audio"] == []
+
+    def test_video_in_video_out_remuxes(self, monkeypatch):
+        calls, run_op = self._recorder()
+        monkeypatch.setattr("vidtools.cli.operations.add_audio",
+                            lambda inp, aud, out, **k: calls["add_audio"].append((inp, aud, out)))
+        args = MagicMock(); args.input = "clip.mp4"; args.output = "out.mp4"
+        _audio_verb(run_op)(args)
+        assert len(calls["op"]) == 1
+        op_in, op_out = calls["op"][0]
+        assert op_in == "clip.mp4" and op_out.endswith(".wav")  # processed into a temp
+        assert len(calls["add_audio"]) == 1
+        inp, aud, out = calls["add_audio"][0]
+        assert inp == "clip.mp4" and aud.endswith(".wav") and out == "out.mp4"
+
+
+class TestPipelineConvertFlags:
+    """Pipeline convert step uses the same flag names as the top-level CLI."""
+
+    def test_video_codec_flag_parsed(self):
+        steps = _parse_pipeline_steps(["convert", "--video-codec", "libx265",
+                                       "--audio-codec", "libopus"])
+        assert steps[0].name == "convert"
+        assert steps[0].params["video_codec"] == "libx265"
+        assert steps[0].params["audio_codec"] == "libopus"
+
+    def test_trim_alias_maps_to_cut_step(self):
+        steps = _parse_pipeline_steps(["trim", "--start", "5", "--end", "9"])
+        assert steps[0].name == "cut"
+        assert steps[0].params["start"] == "5"

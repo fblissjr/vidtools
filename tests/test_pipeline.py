@@ -119,6 +119,18 @@ class TestBuildCommand:
         crf_idx = cmd.index("-crf")
         assert cmd[crf_idx + 1] == "20"
 
+    def test_convert_uses_video_audio_codec_keys(self):
+        # Param keys match the unified CLI flag names (--video-codec/--audio-codec).
+        p = Pipeline("in.mp4", "out.mp4", [
+            PipelineStep("convert", {"video_codec": "libx265", "audio_codec": "libopus",
+                                     "video_bitrate": "2M", "audio_bitrate": "128k"}),
+        ])
+        cmd = p.build_command()
+        assert cmd[cmd.index("-c:v") + 1] == "libx265"
+        assert cmd[cmd.index("-c:a") + 1] == "libopus"
+        assert cmd[cmd.index("-b:v") + 1] == "2M"
+        assert cmd[cmd.index("-b:a") + 1] == "128k"
+
     def test_default_codec_when_no_convert(self):
         p = Pipeline("in.mp4", "out.mp4", [
             PipelineStep("resize", {"percentage": 0.5}),

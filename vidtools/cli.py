@@ -1,5 +1,7 @@
 import argparse
+import os
 import sys
+import tempfile
 import orjson
 from pathlib import Path
 from .utils import is_valid_file, check_ffmpeg_installed
@@ -60,10 +62,11 @@ def _make_smart(op_name: str, video=None, image=None, audio=None):
 # --- Quality mapping (unified 1-100 scale, higher = better) ---
 
 def _quality_to_crf(quality: int) -> int:
-    """Map a 1-100 quality knob to an x264/x265 CRF in a practical band.
-    100 -> 16 (near-lossless), 50 -> 28, 1 -> ~40. Power users pass --crf directly."""
+    """Map a 1-100 quality knob to an x264/x265 CRF, centered on the encoder default.
+    100 -> 16 (near-lossless), 50 -> 23 (x264 default), 1 -> ~30. Power users
+    pass --crf directly to bypass this."""
     q = max(1, min(100, quality))
-    return round(40 - (q / 100) * 24)
+    return round(30 - (q / 100) * 14)
 
 
 _AUDIO_QUALITY_BITRATES = [(90, "320k"), (75, "256k"), (60, "192k"), (40, "128k"), (20, "96k")]
@@ -92,6 +95,33 @@ def _add_time_range(parser):
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument("--end", dest="end_time", help="End time (absolute timestamp)")
     grp.add_argument("--duration", help="Duration from the start time")
+
+
+def _audio_verb(run_audio_op):
+    """Adapt an audio operation so the verb also works on video inputs.
+
+    `run_audio_op(args, in_path, out_path)` runs the underlying audio op.
+      - audio input: run directly.
+      - video input + audio output (e.g. out.mp3): run directly -- ffmpeg reads
+        the video's audio stream and writes audio.
+      - video input + video output: process the audio track into a temp file,
+        then remux it back over the original video (the video stream is copied),
+        so e.g. `normalize clip.mp4 out.mp4` keeps the video and fixes the audio."""
+    def handler(args):
+        in_kind = _detect_kind(args.input)
+        out_is_audio = Path(args.output).suffix.lower() in AUDIO_EXTS
+        if in_kind != "video" or out_is_audio:
+            run_audio_op(args, args.input, args.output)
+            return
+        fd, tmp_audio = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            run_audio_op(args, args.input, tmp_audio)
+            operations.add_audio(args.input, tmp_audio, args.output, mode="replace")
+        finally:
+            if os.path.exists(tmp_audio):
+                os.remove(tmp_audio)
+    return handler
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -499,35 +529,36 @@ Examples:
 
     # ═══════════════════════════════════════════════════════ AUDIO-ONLY ══════
 
+    # Audio-processing verbs accept video inputs too (process the audio track).
     # ---------------------------------------------------------------- normalize
-    normalize = subparsers.add_parser("normalize", help="Normalize audio loudness (two-pass LUFS)",
+    normalize = subparsers.add_parser("normalize", help="Normalize loudness (two-pass LUFS); audio or video",
                                       formatter_class=argparse.RawTextHelpFormatter)
     normalize.add_argument("--target", type=float, default=-16.0, help="Target LUFS (default: -16)")
-    _add_io(normalize, "Input audio")
-    def _normalize(args):
-        audio_ops.normalize_audio(args.input, args.output, target_loudness=args.target)
-    normalize.set_defaults(func=_normalize)
+    _add_io(normalize, "Input audio or video")
+    def _normalize(args, in_path, out_path):
+        audio_ops.normalize_audio(in_path, out_path, target_loudness=args.target)
+    normalize.set_defaults(func=_audio_verb(_normalize))
 
     # ---------------------------------------------------------------- fade
-    fade = subparsers.add_parser("fade", help="Apply fade in/out to audio",
+    fade = subparsers.add_parser("fade", help="Apply audio fade in/out; audio or video",
                                  formatter_class=argparse.RawTextHelpFormatter)
     fade.add_argument("--fade-in", type=float, help="Fade-in duration (seconds)")
     fade.add_argument("--fade-out", type=float, help="Fade-out duration (seconds)")
     fade.add_argument("--total-duration", type=float, help="Total duration (required for fade-out)")
-    _add_io(fade, "Input audio")
-    def _fade(args):
-        audio_ops.fade_audio(args.input, args.output, fade_in=args.fade_in,
+    _add_io(fade, "Input audio or video")
+    def _fade(args, in_path, out_path):
+        audio_ops.fade_audio(in_path, out_path, fade_in=args.fade_in,
                              fade_out=args.fade_out, total_duration=args.total_duration)
-    fade.set_defaults(func=_fade)
+    fade.set_defaults(func=_audio_verb(_fade))
 
     # ---------------------------------------------------------------- resample
-    resample = subparsers.add_parser("resample", help="Resample audio (change sample rate)",
+    resample = subparsers.add_parser("resample", help="Resample audio (change sample rate); audio or video",
                                      formatter_class=argparse.RawTextHelpFormatter)
     resample.add_argument("-r", "--rate", type=int, default=44100, help="Sample rate Hz (default: 44100)")
-    _add_io(resample, "Input audio")
-    def _resample(args):
-        audio_ops.resample_audio(args.input, args.output, sample_rate=args.rate)
-    resample.set_defaults(func=_resample)
+    _add_io(resample, "Input audio or video")
+    def _resample(args, in_path, out_path):
+        audio_ops.resample_audio(in_path, out_path, sample_rate=args.rate)
+    resample.set_defaults(func=_audio_verb(_resample))
 
     # ---------------------------------------------------------------- clean
     clean = subparsers.add_parser(
@@ -563,18 +594,18 @@ Examples:
     clean.add_argument("--lra", type=float, default=11.0, help="Loudness range target (default: 11)")
     clean.add_argument("--audio-codec", dest="audio_codec", help="Audio codec (auto-detected from extension)")
     clean.add_argument("--bitrate", help="Bitrate (e.g. 320k); overrides default VBR for mp3")
-    _add_io(clean, "Input audio")
-    def _clean(args):
+    _add_io(clean, "Input audio or video")
+    def _clean(args, in_path, out_path):
         highpass = None if args.no_highpass or args.highpass == 0 else args.highpass
         denoise = None if args.no_denoise else args.denoise
         audio_ops.clean_audio(
-            args.input, args.output, highpass=highpass, denoise=denoise,
+            in_path, out_path, highpass=highpass, denoise=denoise,
             compress=not args.no_compress, compress_threshold=args.threshold,
             compress_ratio=args.ratio, compress_attack=args.attack, compress_release=args.release,
             loudnorm=not args.no_loudnorm, target_lufs=args.lufs, true_peak=args.true_peak,
             lra=args.lra, audio_codec=args.audio_codec, bitrate=args.bitrate,
         )
-    clean.set_defaults(func=_clean)
+    clean.set_defaults(func=_audio_verb(_clean))
 
     # ---------------------------------------------------------------- separate
     separate = subparsers.add_parser(
@@ -788,10 +819,10 @@ def _make_step_parser(op: str) -> argparse.ArgumentParser:
     elif op == "subtitles":
         p.add_argument("--subs", dest="subs", required=True)
     elif op == "convert":
-        p.add_argument("--vcodec", dest="vcodec")
-        p.add_argument("--acodec", dest="acodec")
-        p.add_argument("--vbitrate", dest="vbitrate")
-        p.add_argument("--abitrate", dest="abitrate")
+        p.add_argument("--video-codec", dest="video_codec")
+        p.add_argument("--audio-codec", dest="audio_codec")
+        p.add_argument("--video-bitrate", dest="video_bitrate")
+        p.add_argument("--audio-bitrate", dest="audio_bitrate")
         p.add_argument("--crf", type=int)
         p.add_argument("--preset")
     else:

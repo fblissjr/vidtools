@@ -136,12 +136,12 @@ class Pipeline:
 def _convert_output_args(params: dict) -> list[str]:
     """Codec / quality args for the terminal convert step."""
     args: list[str] = []
-    args.extend(["-c:v", params.get("vcodec", "libx264")])
-    args.extend(["-c:a", params.get("acodec", "aac")])
-    if "vbitrate" in params and params["vbitrate"]:
-        args.extend(["-b:v", str(params["vbitrate"])])
-    if "abitrate" in params and params["abitrate"]:
-        args.extend(["-b:a", str(params["abitrate"])])
+    args.extend(["-c:v", params.get("video_codec", "libx264")])
+    args.extend(["-c:a", params.get("audio_codec", "aac")])
+    if params.get("video_bitrate"):
+        args.extend(["-b:v", str(params["video_bitrate"])])
+    if params.get("audio_bitrate"):
+        args.extend(["-b:a", str(params["audio_bitrate"])])
     if "crf" in params and params["crf"] is not None:
         args.extend(["-crf", str(params["crf"])])
     else:
