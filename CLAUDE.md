@@ -93,7 +93,7 @@ uv run uvicorn vidtools.server:app --host 0.0.0.0 --port 8910
 uv run pytest tests/ -v
 ```
 
-12 test files, ~265 tests: security, jobs, operations, ytdlp, server, audio_ops, image_ops, dispatch, progress, db, pipeline, separation.
+13 test files, ~277 tests: security, jobs, operations, ytdlp, server, audio_ops, image_ops, dispatch, progress, db, pipeline, separation, integration. `test_integration.py` is the only tier that invokes real ffmpeg/PIL (on a generated clip); it auto-skips when ffmpeg/ffprobe are absent. Everything else mocks `run_ffmpeg`.
 
 ### Generate a test video for manual verification
 

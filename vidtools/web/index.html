@@ -88,9 +88,11 @@
               <option value="trim">Trim (cut by time)</option>
               <option value="screenshot">Screenshot (grab frame)</option>
               <option value="extract-audio">Extract Audio</option>
+              <option value="clean">Clean Audio</option>
               <option value="crop">Crop</option>
               <option value="rotate">Rotate</option>
               <option value="add-audio">Add Audio</option>
+              <option value="match-duration">Match Duration (trim to audio)</option>
               <option value="preset">Apply Preset</option>
             </select>
           </div>
@@ -230,6 +232,16 @@
                 <option value="">Loading...</option>
               </select>
             </div>
+          </div>
+
+          <div id="params-match-duration" class="op-params" hidden>
+            <div class="form-group">
+              <label>Buffer (seconds after audio ends)</label>
+              <input type="number" id="md-buffer" placeholder="0.25" min="0" step="0.05" value="0.25">
+            </div>
+            <label class="checkbox-label">
+              <input type="checkbox" id="md-accurate"> Frame-accurate (re-encode, slower)
+            </label>
           </div>
 
           <button id="process-btn" class="primary-btn" disabled>Process</button>

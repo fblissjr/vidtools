@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.13.1
+## 0.14.0
+
+### Added
+- Web UI parity: **Clean Audio** and **Match Duration** are now in the Process dropdown (Screenshot was already there), so the file-in/file-out CLI ops are reachable from the phone. `separate` (multi-output) and `dl-live` (URL/live) intentionally stay out of the single-file form.
+- **Real-ffmpeg integration test tier** (`tests/test_integration.py`): runs the actual ffmpeg/PIL toolchain on a generated clip for the high-risk paths (convert→mp3 stream handling, screenshot seek-past-EOF, audio-verb-on-video remux, stream-copy trim, resize, webp-via-PIL). Skips automatically when ffmpeg/ffprobe aren't on PATH. Complements the mocked unit tests, which only verify command shape.
+
+No CLI/op behavior changes.
 
 ### Fixed
 - `vidtools preset` with no sub-action now prints help instead of crashing with `AttributeError: 'Namespace' object has no attribute 'func'`. `handle_command` also guards against a missing `func` defensively.

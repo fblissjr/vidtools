@@ -291,6 +291,15 @@
         };
       case "preset":
         return { preset_name: $("#preset-select").value };
+      case "match-duration": {
+        const buf = parseFloat($("#md-buffer").value);
+        return {
+          buffer: Number.isNaN(buf) ? 0.25 : buf,
+          accurate: $("#md-accurate").checked
+        };
+      }
+      case "clean":
+        return {};  // server-side defaults (highpass + denoise + compress + loudnorm)
       default:
         return {};
     }

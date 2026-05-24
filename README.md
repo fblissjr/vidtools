@@ -252,7 +252,7 @@ deploy/
   setup.sh           # Ubuntu deployment script
   vidtools.service   # systemd unit file (hardened)
 data/                # Uploads, output, temp, SQLite DB — gitignored except .gitkeep
-tests/               # 12 files, ~265 tests (run: uv run pytest tests/ -v)
+tests/               # 13 files, ~277 tests (run: uv run pytest tests/ -v)
 ```
 
 ## Tests
@@ -261,4 +261,4 @@ tests/               # 12 files, ~265 tests (run: uv run pytest tests/ -v)
 uv run pytest tests/ -v
 ```
 
-265 tests across security, jobs, operations, video/image/audio ops, ytdlp, server, dispatch, progress, db, pipeline, and separation.
+277 tests across security, jobs, operations, video/image/audio ops, ytdlp, server, dispatch, progress, db, pipeline, and separation.
