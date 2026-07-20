@@ -138,7 +138,13 @@ vidtools pipeline in.mp4 out.mp4 trim --start 60 --end 90 resize -p 0.5 convert 
 uv run pytest tests/ -v
 ```
 
-13 test files plus `conftest.py`: operations, ytdlp, audio_ops, image_ops, imaging_contract, cli_image_paths, compress, dispatch, progress, pipeline, separation, integration, macos_workflow.
+14 test files plus `conftest.py`: operations, ytdlp, audio_ops, image_ops, imaging_contract, cli_image_paths, compress, dispatch, progress, pipeline, separation, integration, macos_workflow, macos_quick_action.
+
+`test_macos_quick_action.py` runs the Quick Action *shell script* under its own
+shebang with stubbed `vidtools`/`osascript`. Executing by path rather than
+forcing `/bin/zsh` is deliberate — forcing the interpreter masks a regression to
+`/bin/bash`, which is 3.2.57 on macOS and dies on the one preset that passes no
+flags. macOS-only; skipped elsewhere.
 
 `test_macos_workflow.py` covers the generated Automator bundle. It exists
 because the Quick Action shipped three defects the rest of the suite could not
