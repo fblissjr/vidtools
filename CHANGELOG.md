@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.16.1
+
+### Fixed
+- **Image operations no longer require ffmpeg.** `main()` checked for the toolchain unconditionally, so `vidtools resize photo.png out.png` — pure PIL, no subprocess — refused to run on a machine without ffmpeg installed. The check is now scoped to invocations that actually need it (`_needs_ffmpeg`), with multi-media verbs deciding from the input's kind.
+
+### Internal
+- **Test foundation.** Added `tests/conftest.py` (there was none): shared image fixtures, suite-wide progress-sink isolation, and marker-driven skipping. Registered `ffmpeg` and `pil_real` markers with `--strict-markers`.
+  - Previously a machine without ffmpeg ran 289 of 304 tests, skipped 15, and **exited 0** — reporting success while dropping every behavioural check in the project. Skipping is now driven by capability rather than file location, and the PIL-only tests run everywhere. The suite reports the same failures with and without ffmpeg.
+  - The shared image fixture was a single flat colour, which makes crop/flip/rotate correctness untestable in principle — a real horizontal flip and a no-op are pixel-identical on it. It is now four distinct quadrants.
+  - Added `tests/test_imaging_contract.py`: contract tests for EXIF orientation, ICC profiles, palette preservation, format-specific save options, rotation fill, and the metadata privacy policy. **12 of these currently fail** — they assert intended behaviour ahead of the imaging refactor, so that a green suite afterwards means something.
+  - Split the two PIL-only CLI tests out of `test_integration.py` into `tests/test_cli_image_paths.py`; living there meant inheriting a module-level ffmpeg gate.
+
 ## 0.16.0
 
 ### Removed

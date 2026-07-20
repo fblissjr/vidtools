@@ -6,11 +6,12 @@ mocked tests verify *command shape*, not *ffmpeg behavior* -- and several real
 bugs this project hit were exactly that gap (convert->mp3 muxer failure, a
 screenshot seek past EOF that exits 0 with no output, a build missing libwebp).
 
-Skipped automatically when ffmpeg/ffprobe aren't on PATH.
+Gating is per-test via the `ffmpeg` marker, not file-wide: the two CLI tests at
+the bottom drive the *image* path, which is pure PIL, and must keep running on a
+machine with no ffmpeg installed. See tests/conftest.py.
 """
 
 import os
-import shutil
 import subprocess
 
 import pytest
@@ -21,10 +22,7 @@ from vidtools.operations import (
 from vidtools.audio_ops import cut_audio, normalize_audio
 from vidtools.progress import FfmpegError
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
-    reason="ffmpeg/ffprobe not installed",
-)
+pytestmark = pytest.mark.ffmpeg
 
 
 def _run(cmd):
@@ -180,26 +178,3 @@ class TestAudioVerbRemuxReal:
         handler = _audio_verb(lambda a, i, o: normalize_audio(i, o, target_loudness=a.target))
         handler(args)
         assert _stream_types(out) == ["audio"]
-
-
-class TestCliErrorHandling:
-    """main() should turn operation ValueErrors into a clean exit, not a traceback."""
-
-    def test_bad_rotation_exits_cleanly(self, media, tmp_path, monkeypatch):
-        import sys
-        from vidtools import cli
-        out = str(tmp_path / "o.png")
-        monkeypatch.setattr(sys, "argv", ["vidtools", "rotate", "-r", "abc", media["img"], out])
-        with pytest.raises(SystemExit) as exc:
-            cli.main()
-        assert exc.value.code == 1
-        assert not os.path.exists(out)
-
-    def test_image_rotate_accepts_float_angle(self, media, tmp_path):
-        from vidtools.cli import parse_arguments
-        out = str(tmp_path / "r.png")
-        args = parse_arguments(["rotate", "-r", "45.5", media["img"], out])
-        args.func(args)
-        from PIL import Image
-        with Image.open(out) as im:
-            assert im.size[0] > 0

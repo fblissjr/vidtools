@@ -34,6 +34,9 @@ def _detect_kind(path: str) -> str:
     )
 
 
+#: Verbs whose media kind is decided by the input file, not the verb.
+_SMART_COMMANDS = frozenset({"info", "convert", "resize", "crop", "trim", "cut", "rotate"})
+
 # Verbs that have a media-specific alternative when the input kind isn't supported.
 _SMART_HINTS = {
     ("resize", "audio"): "Audio has no resolution; use 'resample' to change sample rate.",
@@ -957,13 +960,44 @@ def handle_command(args: argparse.Namespace) -> None:
         _parser.print_help()
 
 
+#: Verbs implemented entirely in PIL. These must stay usable on a machine with
+#: no ffmpeg installed -- requiring the whole toolchain to resize a PNG is a
+#: needless barrier, and it also forced the image tests behind an ffmpeg gate,
+#: which is how a family of image-metadata defects went unnoticed.
+_PIL_ONLY_COMMANDS = frozenset({
+    "compress", "optimize", "thumbnail", "strip-metadata", "adjust",
+})
+
+
+def _needs_ffmpeg(args: argparse.Namespace) -> bool:
+    """Whether this invocation actually requires the ffmpeg toolchain.
+
+    Multi-media verbs (`info`, `convert`, `resize`, `crop`, `rotate`) depend on
+    the input: an image goes through PIL, anything else through ffmpeg.
+    """
+    command = getattr(args, "command", None)
+    if command in _PIL_ONLY_COMMANDS:
+        return False
+    source = getattr(args, "input", None)
+    if command in _SMART_COMMANDS and isinstance(source, str):
+        try:
+            return _detect_kind(source) != "image"
+        except SystemExit:
+            return True  # unknown kind: let the normal error path report it
+    return True
+
+
 def main():
     """Main entry point for the CLI."""
     from .progress import FfmpegError
-    if not check_ffmpeg_installed():
+    try:
+        args = parse_arguments()
+    except SystemExit:
+        raise
+    if _needs_ffmpeg(args) and not check_ffmpeg_installed():
         sys.exit("Error: ffmpeg not found in PATH. Please install ffmpeg first.")
     try:
-        handle_command(parse_arguments())
+        handle_command(args)
     except (FfmpegError, ValueError) as e:
         # ValueError covers operation-level validation (bad rotation/crop
         # geometry, missing fade args, non-integer rotate angle, etc.) so the

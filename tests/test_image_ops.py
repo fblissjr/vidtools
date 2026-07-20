@@ -9,15 +9,6 @@ from vidtools.image_ops import (
 
 
 @pytest.fixture
-def sample_image(tmp_path):
-    """Create a 200x100 RGB test image."""
-    img = Image.new("RGB", (200, 100), color=(255, 0, 0))
-    path = str(tmp_path / "test.png")
-    img.save(path)
-    return path
-
-
-@pytest.fixture
 def sample_image_with_exif(tmp_path):
     """Create a JPEG with basic EXIF data."""
     img = Image.new("RGB", (200, 100), color=(0, 255, 0))
