@@ -172,11 +172,16 @@ forcing `/bin/zsh` is deliberate — forcing the interpreter masks a regression 
 `/bin/bash`, which is 3.2.57 on macOS and dies on the one preset that passes no
 flags. macOS-only; skipped elsewhere.
 
-`test_macos_workflow.py` covers the generated Automator bundle. It exists
-because the Quick Action shipped three defects the rest of the suite could not
-see — the bundle was built inside a shell heredoc, and macOS reports no error
-for a structurally-valid-but-unregisterable workflow. Pure-plist assertions; no
-Automator, no Finder, no install.
+`test_macos_workflow.py` asserts on the dicts `make_workflow.build_workflow` /
+`build_info_plist` return. **Nothing runs `install.sh`, so nothing covers
+installation itself** — do not read a green suite as "the Quick Action works".
+
+The Quick Action has shipped four defects, each in a different layer than the
+previous fix: shell semantics (bash 3.2 empty-array), output discovery (a glob
+matching a stale file), plist contents (metadata subset macOS ignores), and
+bundle lifecycle (overwriting in place, so macOS never re-scans). Only the
+third is covered here. The pattern to avoid is testing the layer just touched
+and calling the feature verified — check the OS's view, per the section above.
 
 Two real-toolchain tiers, separated by marker rather than by file:
 
