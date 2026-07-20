@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.22.0
+
+### Added
+- **`compress --fit vision`** downscales an image to what the destination will actually keep, before compressing it. On the 6144x2560 reference image: **135x smaller instead of 34x** (329 KB to 84 KB), with the model seeing the same pixels either way — it would have resampled to 2576x1073 on arrival regardless.
+  - Two profiles: `vision` (Opus 4.8/4.7, Sonnet 5 — 2576px long edge, 4784 visual tokens) and `vision-standard` (Haiku and older — 1568px, 1568 tokens). Named rather than a raw pixel flag because the constants differ per model. Never upscales.
+  - **Both constraints are enforced, and a long-edge cap alone is wrong** for the most common photo shapes: fitting a 3:2 photo to 2576px still leaves it 19% over the token budget and a square image 77% over, so the destination resamples a second time — discarding detail you paid to compress and adding a resampling pass.
+  - The token cap is solved in *patch* space, not pixel area. A visual token is a 28x28 patch counted with ceiling division, so a partial patch costs a whole one: 2372x1581 sits under 4784x28x28 pixels but is 85x57 = 4845 patches. A pixel-area calculation overshoots on exactly the aspect ratios where the budget binds.
+  - `CompressionReport` gains `encoded_width`/`encoded_height`/`fit_profile`; `width`/`height` still mean the source, so existing callers do not silently change meaning.
+
+### Scope, measured
+Across 2,026 local images, **14% exceed the high-resolution tier** and 41% exceed the standard one — about 1.7 gigapixels currently discarded on arrival in aggregate. So this is a no-op for most images and a large win for large ones; it is opt-in for that reason rather than being folded into the default.
+
+### Fixed
+- `compress` routes through the shared imaging core, so EXIF orientation is applied and the ICC profile is carried into every candidate encode. It previously used a bare `Image.open`, which rendered portrait phone photos sideways.
+
 ## 0.21.0
 
 ### Added

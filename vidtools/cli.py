@@ -6,7 +6,7 @@ from .utils import (
     is_valid_file, check_ffmpeg_installed, VIDEO_EXTS, AUDIO_EXTS, IMAGE_EXTS,
 )
 from . import operations
-from .compress import DEFAULT_TARGET_SSIM, compress_image
+from .compress import DEFAULT_TARGET_SSIM, FIT_PROFILES, compress_image
 from . import image_ops
 from . import audio_ops
 from . import presets
@@ -775,6 +775,11 @@ decodes it, so it is opt-in via --allow-avif.""",
                           help="Byte budget (e.g. 500k, 2M). Maximises fidelity within it")
     compress_p.add_argument("--allow-avif", action="store_true",
                           help="Allow AVIF. Compresses best, but Claude/Gemini cannot read it")
+    compress_p.add_argument("--fit", choices=sorted(FIT_PROFILES),
+                            help="Downscale for a destination with a resolution ceiling "
+                                 "before compressing. 'vision' targets Claude's high-resolution "
+                                 "tier (Opus 4.8/4.7, Sonnet 5); 'vision-standard' targets Haiku "
+                                 "and older. Never upscales.")
     compress_p.add_argument("--dry-run", action="store_true",
                           help="Report the ranked candidates without writing a file")
 
@@ -782,10 +787,14 @@ decodes it, so it is opt-in via --allow-avif.""",
         report = compress_image(
             args.input, args.output,
             target_ssim=args.target_ssim, lossless=args.lossless,
-            max_size=args.max_size, allow_avif=args.allow_avif, dry_run=args.dry_run,
+            max_size=args.max_size, allow_avif=args.allow_avif, fit=args.fit,
+            dry_run=args.dry_run,
         )
         src_mb = report.source_size / 1048576
-        print(f"{report.width}x{report.height} {report.content_class}, {src_mb:.2f} MB")
+        dims = f"{report.width}x{report.height}"
+        if report.was_resized:
+            dims += f" -> {report.encoded_width}x{report.encoded_height} ({report.fit_profile})"
+        print(f"{dims} {report.content_class}, {src_mb:.2f} MB")
         for cand in report.candidates:
             marker = "->" if cand is report.winner else "  "
             print(f" {marker} {cand.label():18} {cand.size / 1048576:7.2f} MB"

@@ -40,6 +40,7 @@ without AVIF or WebP degrades to the formats it does have (see
 from __future__ import annotations
 
 import io
+import math
 import os
 from dataclasses import dataclass, field
 
@@ -87,6 +88,40 @@ _FLAT_RUN_MIN = 0.60
 #: Minimum hard-edge density, which excludes smooth gradients (measured 0.0000)
 #: while admitting cartoon art (0.006-0.018) and text (0.03-0.12).
 _HARD_EDGE_MIN = 0.002
+
+#: Downscale profiles for images destined somewhere with a resolution ceiling.
+#:
+#: Each is (max_long_edge_px, max_total_pixels). **Both** constraints matter,
+#: and which one binds depends on aspect ratio -- a long-edge cap alone is wrong
+#: for the most common photo shapes. Fitting a 3:2 photo to a 2576px long edge
+#: still leaves it 19% over the pixel budget, and a square image 77% over, so
+#: the destination resamples a second time. That second resample is the cost:
+#: you have compressed detail that gets thrown away, and paid an extra
+#: resampling pass in quality.
+#:
+#: Numbers are Claude's documented vision tiers, as (max_long_edge, max_tokens).
+#: They differ per model, which is why this is a named profile rather than a raw
+#: pixel flag.
+#:
+#: The token cap is deliberately NOT converted to a pixel area. A visual token is
+#: a 28x28 patch counted with *ceiling* division, so a partial patch costs a
+#: whole one: 2372x1581 sits under 4784*28*28 pixels but is 85x57 = 4845
+#: patches, over the cap. Solving in pixel space silently overshoots on exactly
+#: the aspect ratios where the budget binds.
+FIT_PROFILES = {
+    # Opus 4.8 / 4.7, Sonnet 5.
+    "vision": (2576, 4784),
+    # Haiku and older tiers.
+    "vision-standard": (1568, 1568),
+}
+
+#: Side of one visual token, in pixels.
+_PATCH = 28
+
+
+def _visual_tokens(width: int, height: int) -> int:
+    """Patch count for an image, counted the way the destination counts it."""
+    return math.ceil(width / _PATCH) * math.ceil(height / _PATCH)
 
 #: Minimum target applied to flat content (text, UI, line art).
 #:
@@ -197,6 +232,38 @@ def compute_ssim(a: Image.Image, b: Image.Image, band_rows: int = 512) -> float:
 # ---------------------------------------------------------------------------
 # content analysis
 # ---------------------------------------------------------------------------
+
+def _fit_for_destination(img: Image.Image, profile: str) -> Image.Image:
+    """Downscale so the image satisfies BOTH the long-edge and pixel caps.
+
+    Never upscales: an image already inside both caps is returned untouched.
+    """
+    try:
+        max_edge, max_tokens = FIT_PROFILES[profile]
+    except KeyError:
+        raise ValueError(
+            f"Unknown fit profile '{profile}'. Available: "
+            f"{', '.join(sorted(FIT_PROFILES))}."
+        ) from None
+
+    width, height = img.width, img.height
+    if max(width, height) <= max_edge and _visual_tokens(width, height) <= max_tokens:
+        return img  # already inside both caps; never upscale
+
+    scale = min(max_edge / max(width, height), 1.0)
+    new_w, new_h = max(1, round(width * scale)), max(1, round(height * scale))
+
+    # Then walk down until the patch count fits. Ceiling division means the
+    # pixel-area estimate can land just over the cap, so verify rather than
+    # compute -- the overshoot is small but real on 3:2 and square images.
+    while _visual_tokens(new_w, new_h) > max_tokens and min(new_w, new_h) > 1:
+        scale *= 0.98
+        new_w, new_h = max(1, round(width * scale)), max(1, round(height * scale))
+
+    fitted = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    fitted.info = img.info
+    return fitted
+
 
 def _classify_content(img: Image.Image) -> str:
     """Classify as 'flat' (text, UI, line art, cartoon) or 'photographic'.
@@ -352,6 +419,9 @@ class CompressionReport:
 
     source_path: str
     source_size: int
+    #: Dimensions of the *source*. `encoded_width`/`encoded_height` differ when a
+    #: fit profile downscaled it; kept separate so `width`/`height` do not
+    #: quietly change meaning for existing callers.
     width: int
     height: int
     has_alpha: bool
@@ -360,7 +430,14 @@ class CompressionReport:
     winner: Candidate
     target_ssim: float | None
     max_size: int | None
+    encoded_width: int | None = None
+    encoded_height: int | None = None
+    fit_profile: str | None = None
     output_path: str | None = None
+
+    @property
+    def was_resized(self) -> bool:
+        return bool(self.encoded_width and self.encoded_width != self.width)
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +532,7 @@ def recommend(
     lossless: bool = False,
     max_size: int | None = None,
     allow_avif: bool = False,
+    fit: str | None = None,
     formats: list[str] | None = None,
 ) -> CompressionReport:
     """Search candidate encodings and return a ranked, measured report.
@@ -477,6 +555,12 @@ def recommend(
     source = _open_image(input_file)
     img = source.convert("RGBA" if source.mode in ("RGBA", "LA", "PA") else "RGB")
     img.info = source.info
+    source_size_px = (img.width, img.height)
+    if fit:
+        # Fit before measuring: SSIM must score the image that will actually be
+        # written, and searching quality at a resolution the destination discards
+        # wastes both time and bytes.
+        img = _fit_for_destination(img, fit)
     has_alpha = img.mode == "RGBA"
 
     source_size = os.path.getsize(input_file)
@@ -566,8 +650,11 @@ def recommend(
     return CompressionReport(
         source_path=input_file,
         source_size=source_size,
-        width=img.width,
-        height=img.height,
+        width=source_size_px[0],
+        height=source_size_px[1],
+        encoded_width=img.width,
+        encoded_height=img.height,
+        fit_profile=fit,
         has_alpha=has_alpha,
         content_class=content_class,
         candidates=viable,
@@ -585,6 +672,7 @@ def compress_image(
     lossless: bool = False,
     max_size: int | None = None,
     allow_avif: bool = False,
+    fit: str | None = None,
     dry_run: bool = False,
 ) -> CompressionReport:
     """Compress an image, choosing the format automatically when unconstrained.
@@ -615,7 +703,8 @@ def compress_image(
             append_extension = True
 
     report = recommend(input_file, target_ssim=target_ssim, lossless=lossless,
-                       max_size=max_size, allow_avif=allow_avif, formats=forced)
+                       max_size=max_size, allow_avif=allow_avif, fit=fit,
+                       formats=forced)
 
     if output_file is None:
         base = os.path.splitext(input_file)[0]

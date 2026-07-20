@@ -11,6 +11,7 @@ import pytest
 from PIL import Image
 
 from vidtools.compress import (
+    FIT_PROFILES,
     Candidate,
     _classify_content,
     _pick_probe_crop,
@@ -432,3 +433,76 @@ def test_smooth_gradient_stays_photographic_despite_flat_runs(tmp_path):
     img = Image.fromarray(
         np.dstack([x * 0.4, y * 0.4, (x + y) * 0.2]).clip(0, 255).astype(np.uint8))
     assert _classify_content(img) == "photographic"
+
+
+# --------------------------------------------------------------------------
+# fit profiles
+# --------------------------------------------------------------------------
+
+class TestFitProfiles:
+    """Downscaling for a destination that has a resolution ceiling.
+
+    Compressing at a resolution the destination discards is wasted twice: the
+    detail is thrown away on arrival, and the destination resamples a second
+    time, costing quality.
+    """
+
+    @pytest.mark.parametrize("dims", [
+        (6144, 2560),   # 2.4:1  -- long edge binds
+        (3840, 2160),   # 16:9   -- long edge binds, exactly at the token cap
+        (6000, 4000),   # 3:2    -- pixel budget binds
+        (4000, 4000),   # 1:1    -- pixel budget binds hardest
+        (8000, 2000),   # 4:1    -- long edge binds
+        (2160, 3840),   # portrait
+    ])
+    @pytest.mark.parametrize("profile", sorted(FIT_PROFILES))
+    def test_result_satisfies_both_caps(self, dims, profile):
+        """A long-edge cap alone is wrong for the most common photo shapes.
+
+        Fitting a 3:2 photo to 2576px still leaves it over the token budget, so
+        the destination resamples again. Both constraints must hold.
+        """
+        from vidtools.compress import _fit_for_destination, _visual_tokens
+        max_edge, max_tokens = FIT_PROFILES[profile]
+        fitted = _fit_for_destination(Image.new("RGB", dims), profile)
+        assert max(fitted.size) <= max_edge, f"{dims} -> {fitted.size} exceeds long edge"
+        assert _visual_tokens(*fitted.size) <= max_tokens, (
+            f"{dims} -> {fitted.size} is {_visual_tokens(*fitted.size)} tokens, "
+            f"over the {max_tokens} cap"
+        )
+
+    def test_tokens_use_ceiling_division(self):
+        """The cap is on patches, not pixels. A partial 28px patch costs a whole
+        one, so a pixel-area calculation overshoots: 2372x1581 is under
+        4784*28*28 pixels but is 85x57 = 4845 patches."""
+        from vidtools.compress import _visual_tokens
+        assert _visual_tokens(2372, 1581) == 4845
+        assert 2372 * 1581 < 4784 * 28 * 28, "premise of the test no longer holds"
+
+    def test_never_upscales(self):
+        from vidtools.compress import _fit_for_destination
+        small = Image.new("RGB", (800, 600))
+        assert _fit_for_destination(small, "vision").size == (800, 600)
+
+    def test_unknown_profile_names_the_valid_ones(self):
+        from vidtools.compress import _fit_for_destination
+        with pytest.raises(ValueError, match="Unknown fit profile"):
+            _fit_for_destination(Image.new("RGB", (100, 100)), "nope")
+
+    def test_report_keeps_source_and_encoded_dimensions_separate(self, tmp_path):
+        """`width`/`height` must keep meaning source dimensions for existing
+        callers; the fitted size goes in its own fields."""
+        rng = np.random.default_rng(2)
+        big = Image.fromarray(rng.integers(0, 256, (64, 64, 3), dtype=np.uint8))
+        src = tmp_path / "big.png"
+        big.resize((3200, 1800), Image.Resampling.LANCZOS).save(src)
+
+        report = recommend(str(src), target_ssim=0.95, fit="vision")
+        assert (report.width, report.height) == (3200, 1800)
+        assert report.encoded_width == 2576
+        assert report.was_resized and report.fit_profile == "vision"
+
+    def test_no_fit_leaves_dimensions_untouched(self, photo_png):
+        report = recommend(photo_png, target_ssim=0.95)
+        assert not report.was_resized
+        assert report.encoded_width == report.width
