@@ -87,9 +87,36 @@ def _apply_encode_options(command: list, video_codec: str | None, audio_codec: s
 # --- Core FFmpeg Functions ---
 
 
+def _add_metadata_policy(command: list, preserve_metadata: bool = False) -> None:
+    """Drop container metadata unless the caller asks to keep it.
+
+    Video ops previously carried every container tag straight through, so
+    `trim`, `convert` and `resize` all shipped the source's GPS coordinates,
+    camera make/model and capture time into the output. Only `sanitize` stripped
+    them. That is the opposite failure from the image path, which historically
+    dropped everything -- including data it should have kept.
+
+    **Rotation is unaffected either way**, which is what made this safe to turn
+    on by default. Verified against a video carrying a 90-degree display matrix:
+    with `-c copy` the matrix survives `-map_metadata -1` intact; on a re-encode
+    ffmpeg auto-rotates during decode, so the pixels come out upright and the
+    matrix is no longer needed. All three paths display identically.
+
+    Granularity is coarser than the image policy: ffmpeg's `-map_metadata` is
+    all-or-nothing at the container level, so provenance tags (title, copyright)
+    cannot be kept while dropping location without a separate probe-and-replay
+    pass. Defaulting to strip fails closed, which is the right direction when
+    the payload can be a home address -- or, as seen on locally generated
+    files, a 109 KB comment tag containing an entire generation prompt.
+    """
+    if not preserve_metadata:
+        command.extend(["-map_metadata", "-1"])
+
+
 def cut_video(input_file, output_file, start_time=None, end_time=None, duration=None,
               use_copy=True, fast_seek=False, fix_sync=False,
-              video_codec=None, audio_codec=None, crf=None, hwaccel=False):
+              video_codec=None, audio_codec=None, crf=None, hwaccel=False,
+              preserve_metadata=False):
     """Cut/trim video following ffmpeg best practices."""
     command = ["ffmpeg", "-y"]
     if fast_seek and start_time:
@@ -108,16 +135,18 @@ def cut_video(input_file, output_file, start_time=None, end_time=None, duration=
         _apply_encode_options(command, video_codec, audio_codec, crf, hwaccel)
     if fix_sync:
         command.extend(["-af", "aresample=async=1"])
+    _add_metadata_policy(command, preserve_metadata)
     _add_faststart_if_mp4(command, output_file)
     command.append(output_file)
     run_ffmpeg(command)
 
 
 def resize_video(input_file, output_file, percentage=None, width=None, height=None,
-                 algorithm="lanczos"):
+                 algorithm="lanczos", preserve_metadata=False):
     """Resizes a video using ffmpeg scale filter."""
     scale_filter = _build_scale_filter(percentage, width, height, algorithm)
     command = ["ffmpeg", "-y", "-i", input_file, "-vf", scale_filter, "-c:a", "copy"]
+    _add_metadata_policy(command, preserve_metadata)
     _add_faststart_if_mp4(command, output_file)
     command.append(output_file)
     run_ffmpeg(command)
@@ -126,7 +155,7 @@ def resize_video(input_file, output_file, percentage=None, width=None, height=No
 def convert_format(input_file, output_file, format_type, video_codec=None, audio_codec=None,
                    video_bitrate=None, audio_bitrate=None, quality_scale=None,
                    start_time=None, end_time=None, duration=None, preset=None, use_copy=False,
-                   hwaccel=False):
+                   hwaccel=False, preserve_metadata=False):
     """Converts video format using ffmpeg."""
     command = ["ffmpeg", "-y"]
     if start_time: command.extend(["-ss", str(start_time)])
@@ -164,6 +193,7 @@ def convert_format(input_file, output_file, format_type, video_codec=None, audio
         else:
             command.extend(["-crf", "23"])
     if preset: command.extend(["-preset", preset])
+    _add_metadata_policy(command, preserve_metadata)
     _add_faststart_if_mp4(command, output_file)
     command.append(output_file)
     run_ffmpeg(command)
@@ -238,7 +268,7 @@ def screenshot(input_file, output_file, timestamp=None, quality=95, accurate=Fal
     logger.info("Screenshot captured", output=output_file, timestamp=timestamp)
 
 
-def concatenate_videos(input_files, output_file, use_copy=True):
+def concatenate_videos(input_files, output_file, use_copy=True, preserve_metadata=False):
     """Concatenates video files."""
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
         list_file_path = f.name
@@ -251,6 +281,7 @@ def concatenate_videos(input_files, output_file, use_copy=True):
             command.extend(["-c", "copy"])
         else:
             command.extend(["-c:v", "libx264", "-c:a", "aac"])
+        _add_metadata_policy(command, preserve_metadata)
         _add_faststart_if_mp4(command, output_file)
         command.append(output_file)
         run_ffmpeg(command)
@@ -258,7 +289,7 @@ def concatenate_videos(input_files, output_file, use_copy=True):
         os.remove(list_file_path)
 
 
-def crop_video(input_file, output_file, width, height, x, y):
+def crop_video(input_file, output_file, width, height, x, y, preserve_metadata=False):
     """Crops a video. ffmpeg fails late and cryptically on bad geometry, so
     reject negative/zero sizes and negative offsets up front. (Full bounds
     checking would need an ffprobe pass; crop_image can check cheaply because
@@ -267,7 +298,9 @@ def crop_video(input_file, output_file, width, height, x, y):
         raise ValueError(f"Crop width/height must be positive, got {width}x{height}")
     if x < 0 or y < 0:
         raise ValueError(f"Crop offset must be non-negative, got x={x} y={y}")
-    command = ["ffmpeg", "-y", "-i", input_file, "-vf", f"crop={width}:{height}:{x}:{y}", output_file]
+    command = ["ffmpeg", "-y", "-i", input_file, "-vf", f"crop={width}:{height}:{x}:{y}"]
+    _add_metadata_policy(command, preserve_metadata)
+    command.append(output_file)
     run_ffmpeg(command)
 
 
@@ -278,10 +311,12 @@ def add_subtitles(input_file, output_file, subtitles_file):
     run_ffmpeg(command)
 
 
-def rotate_video(input_file, output_file, rotation):
+def rotate_video(input_file, output_file, rotation, preserve_metadata=False):
     """Rotates video."""
     command = ["ffmpeg", "-y", "-i", input_file, "-vf",
-               _build_transpose_filter(rotation), output_file]
+               _build_transpose_filter(rotation)]
+    _add_metadata_policy(command, preserve_metadata)
+    command.append(output_file)
     run_ffmpeg(command)
 
 
@@ -386,6 +421,7 @@ def _stream_duration(stream: dict, format_info: dict) -> float | None:
 
 
 def trim_to_audio(input_file: str, output_file: str, buffer: float = 0.25,
+                  preserve_metadata: bool = False,
                   accurate: bool = False, video_codec: str | None = None,
                   audio_codec: str | None = None, crf: int | None = None,
                   hwaccel: bool = False):
@@ -431,6 +467,7 @@ def trim_to_audio(input_file: str, output_file: str, buffer: float = 0.25,
     else:
         command.extend(["-c", "copy", "-avoid_negative_ts", "make_zero"])
 
+    _add_metadata_policy(command, preserve_metadata)
     _add_faststart_if_mp4(command, output_file)
     command.append(output_file)
     run_ffmpeg(command)
@@ -525,7 +562,8 @@ def create_slideshow(image_pattern: str, output_file: str, duration_per_image: f
 
 
 def add_audio(input_file: str, audio_file: str, output_file: str,
-              mode: str = "replace", volume: float = 1.0):
+              mode: str = "replace", volume: float = 1.0,
+              preserve_metadata: bool = False):
     """Add an audio track to a video file.
 
     Args:
@@ -557,6 +595,7 @@ def add_audio(input_file: str, audio_file: str, output_file: str,
         else:
             filter_expr = "[0:a][1:a]amix=inputs=2:duration=shortest"
         command.extend(["-filter_complex", filter_expr, "-map", "0:v", "-c:v", "copy"])
+    _add_metadata_policy(command, preserve_metadata)
     _add_faststart_if_mp4(command, output_file)
     command.append(output_file)
     run_ffmpeg(command)

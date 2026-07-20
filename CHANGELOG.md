@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.20.0
+
+### Changed (privacy)
+- **Video ops no longer carry identifying metadata into their output.** `trim`, `convert`, `resize`, `crop`, `rotate`, `concat`, `match-duration` and `add-audio` all passed the source's container tags straight through, so a trimmed phone video shipped its **GPS coordinates**, camera make/model and capture time. Only `sanitize` stripped them. Verified against a tagged clip before and after.
+  - This is the mirror of the image bug fixed in 0.17.0: image ops dropped everything including data they should have kept; video ops kept everything including data they should have dropped.
+  - Locally generated files showed the payload is not just location — AI video tools embed their full workflow and prompt text in the `comment` tag, measured at 41 KB and 109 KB on two real files.
+  - `--preserve-metadata` opts back in.
+
+### Why this was safe to default on
+Rotation is unaffected, which was the open question blocking this change. Verified against a video carrying a 90-degree display matrix: on a **stream copy** the matrix survives `-map_metadata -1` intact; on a **re-encode** ffmpeg auto-rotates during decode, so the pixels come out upright and the matrix is no longer needed. Source, copy and re-encode all display identically.
+
+Note the granularity differs from images by necessity. For images the kept set is an allowlist, so `--preserve-metadata` restores authorship tags without re-admitting GPS. ffmpeg's `-map_metadata` is all-or-nothing at the container level, so for video the flag keeps everything, location included.
+
 ## 0.19.1
 
 ### Fixed

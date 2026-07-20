@@ -178,3 +178,99 @@ class TestAudioVerbRemuxReal:
         handler = _audio_verb(lambda a, i, o: normalize_audio(i, o, target_loudness=a.target))
         handler(args)
         assert _stream_types(out) == ["audio"]
+
+
+class TestMetadataPrivacyReal:
+    """Real ffmpeg: identifying tags must not ride along into the output.
+
+    Video failed the opposite way from images. Image ops dropped everything
+    including data they should have kept; video ops carried everything through,
+    so `trim`, `convert` and `resize` all shipped the source's GPS coordinates.
+    Only `sanitize` stripped them.
+    """
+
+    @pytest.fixture(scope="class")
+    def tagged(self, tmp_path_factory):
+        d = tmp_path_factory.mktemp("tagged")
+        src = str(d / "src.mp4")
+        _run(["ffmpeg", "-v", "error", "-f", "lavfi",
+              "-i", "testsrc=duration=1:size=160x120:rate=10",
+              "-metadata", "location=+37.7749-122.4194/",
+              "-metadata", "make=ExampleCorp",
+              "-metadata", "comment=a generation prompt that should not travel",
+              "-c:v", "libx264", "-y", src])
+        return src, d
+
+    def _tag(self, path, key):
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", f"format_tags={key}",
+             "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True).stdout.strip()
+        return out or None
+
+    def test_source_actually_carries_the_tags(self, tagged):
+        src, _ = tagged
+        assert self._tag(src, "location"), "fixture lost its GPS tag; test proves nothing"
+
+    @pytest.mark.parametrize("op", ["trim", "convert", "resize"])
+    def test_identifying_tags_are_stripped_by_default(self, tagged, op):
+        src, d = tagged
+        out = str(d / f"{op}.mp4")
+        {
+            "trim": lambda: cut_video(src, out, start_time=0, end_time=1),
+            "convert": lambda: convert_format(src, out, "mp4"),
+            "resize": lambda: resize_video(src, out, percentage=0.5),
+        }[op]()
+        for key in ("location", "make", "comment"):
+            assert self._tag(out, key) is None, f"{op} leaked '{key}'"
+
+    def test_preserve_metadata_keeps_them(self, tagged):
+        src, d = tagged
+        out = str(d / "kept.mp4")
+        cut_video(src, out, start_time=0, end_time=1, preserve_metadata=True)
+        assert self._tag(out, "location") == "+37.7749-122.4194/"
+
+    def test_stripping_does_not_disturb_rotation(self, tmp_path):
+        """The reason this was safe to default on.
+
+        A portrait phone video stores a landscape buffer plus a 90-degree
+        display matrix. On a stream copy the matrix survives `-map_metadata -1`;
+        on a re-encode ffmpeg auto-rotates during decode, so the pixels come out
+        upright and the matrix is no longer needed. Either way the video must
+        display the same way round.
+        """
+        plain, rotated = str(tmp_path / "p.mp4"), str(tmp_path / "r.mp4")
+        _run(["ffmpeg", "-v", "error", "-f", "lavfi",
+              "-i", "testsrc=duration=1:size=320x180:rate=10",
+              "-metadata", "location=+37.7749-122.4194/",
+              "-c:v", "libx264", "-y", plain])
+        _run(["ffmpeg", "-v", "error", "-display_rotation", "90",
+              "-i", plain, "-c", "copy", "-y", rotated])
+
+        def displayed(path):
+            w, h = [int(v) for v in subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
+                capture_output=True, text=True).stdout.strip().rstrip(",").split(",")[:2]]
+            rot = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                 "stream_side_data=rotation", "-of", "default=nw=1:nk=1", path],
+                capture_output=True, text=True).stdout.strip().splitlines()
+            if rot and abs(int(float(rot[0]))) == 90:
+                w, h = h, w
+            return w, h
+
+        before = displayed(rotated)
+        assert before[1] > before[0], "fixture is not portrait; test proves nothing"
+
+        for label, out, run in [
+            ("copy", str(tmp_path / "c.mp4"),
+             lambda o: cut_video(rotated, o, start_time=0, end_time=1)),
+            ("re-encode", str(tmp_path / "e.mp4"),
+             lambda o: resize_video(rotated, o, percentage=1.0)),
+        ]:
+            run(out)
+            assert self._tag(out, "location") is None, f"{label} leaked GPS"
+            assert displayed(out) == before, (
+                f"{label} changed the displayed orientation: {before} -> {displayed(out)}"
+            )

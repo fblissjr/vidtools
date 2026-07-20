@@ -109,16 +109,24 @@ def _parse_size(value: str) -> int:
 def _add_preserve_metadata(parser):
     """Add `--preserve-metadata` (default off).
 
-    Identifying metadata (GPS, camera make/model, capture time) is stripped by
-    default: these verbs write a new file, so the original keeps everything,
-    while a leaked location does not come back. This flag keeps authorship
-    tags (copyright, artist, description) -- it never re-admits GPS.
-    Rendering data (orientation, colour profile) is preserved either way.
+    Identifying metadata -- GPS, camera make/model, capture time -- is stripped
+    by default. These verbs write a *new* file, so the original keeps
+    everything, while a leaked location does not come back.
+
+    Rendering data survives either way: image orientation is baked into pixels
+    and the colour profile is carried through; video keeps its display matrix
+    (on a stream copy) or has the rotation baked in by the re-encode.
+
+    Granularity differs by medium, because the underlying tools differ. For
+    images the kept set is an allowlist, so `--preserve-metadata` restores
+    authorship tags (copyright, artist, description) without re-admitting GPS.
+    For video, ffmpeg's `-map_metadata` is all-or-nothing at the container
+    level, so the flag keeps *everything* -- including location.
     """
     parser.add_argument(
         "--preserve-metadata", action="store_true",
-        help="Keep authorship metadata (copyright/artist). Identifying tags "
-             "(GPS, camera model) are always stripped.")
+        help="Keep source metadata. Images: authorship tags only, never GPS. "
+             "Video: all container tags, including GPS. Off by default.")
 
 
 def _add_time_range(parser):
@@ -224,7 +232,8 @@ Examples:
             video_codec=args.video_codec, audio_codec=args.audio_codec,
             video_bitrate=args.video_bitrate, audio_bitrate=args.bitrate,
             quality_scale=crf, start_time=args.start_time, end_time=args.end_time,
-            duration=args.duration, preset=args.preset, use_copy=args.copy, hwaccel=args.hwaccel)
+            duration=args.duration, preset=args.preset, use_copy=args.copy, hwaccel=args.hwaccel,
+            preserve_metadata=args.preserve_metadata)
     def _convert_image(args):
         image_ops.convert_image(args.input, args.output,
                                 quality=args.quality if args.quality is not None else 85,
@@ -264,7 +273,8 @@ Examples:
     _add_io(resize)
     def _resize_video(args):
         operations.resize_video(args.input, args.output, percentage=args.percentage,
-                                width=args.width, height=args.height, algorithm=args.algorithm)
+                                width=args.width, height=args.height, algorithm=args.algorithm,
+                                preserve_metadata=args.preserve_metadata)
     def _resize_image(args):
         image_ops.resize_image(args.input, args.output, percentage=args.percentage,
                                width=args.width, height=args.height,
@@ -283,7 +293,8 @@ Examples:
     _add_preserve_metadata(crop)
     _add_io(crop)
     def _crop_video(args):
-        operations.crop_video(args.input, args.output, args.width, args.height, args.x, args.y)
+        operations.crop_video(args.input, args.output, args.width, args.height, args.x, args.y,
+                              preserve_metadata=args.preserve_metadata)
     def _crop_image(args):
         image_ops.crop_image(args.input, args.output, args.width, args.height, args.x, args.y,
                              preserve_metadata=args.preserve_metadata)
@@ -307,6 +318,7 @@ Examples:
 Time formats: HH:MM:SS.mmm, seconds (66.5), or MM:SS"""
     )
     _add_time_range(trim)
+    _add_preserve_metadata(trim)
     trim.add_argument("--accurate", action="store_true",
                       help="Frame-accurate (re-encodes, slower; video only)")
     trim.add_argument("--fast-seek", action="store_true",
@@ -322,7 +334,8 @@ Time formats: HH:MM:SS.mmm, seconds (66.5), or MM:SS"""
                              end_time=args.end_time, duration=args.duration,
                              use_copy=not args.accurate, fast_seek=args.fast_seek,
                              fix_sync=args.fix_sync, video_codec=args.video_codec,
-                             audio_codec=args.audio_codec, crf=args.crf, hwaccel=args.hwaccel)
+                             audio_codec=args.audio_codec, crf=args.crf, hwaccel=args.hwaccel,
+                             preserve_metadata=args.preserve_metadata)
     def _trim_audio(args):
         audio_ops.cut_audio(args.input, args.output, start_time=args.start_time,
                             end_time=args.end_time, duration=args.duration)
@@ -338,7 +351,8 @@ Time formats: HH:MM:SS.mmm, seconds (66.5), or MM:SS"""
     _add_preserve_metadata(rotate)
     _add_io(rotate)
     def _rotate_video(args):
-        operations.rotate_video(args.input, args.output, args.rotation)
+        operations.rotate_video(args.input, args.output, args.rotation,
+                                preserve_metadata=args.preserve_metadata)
     def _rotate_image(args):
         try:
             angle = float(args.rotation)
