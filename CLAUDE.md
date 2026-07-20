@@ -138,7 +138,7 @@ vidtools pipeline in.mp4 out.mp4 trim --start 60 --end 90 resize -p 0.5 convert 
 uv run pytest tests/ -v
 ```
 
-15 test files plus `conftest.py`: operations, ytdlp, audio_ops, image_ops, imaging_contract, cli_image_paths, compress, dispatch, progress, pipeline, separation, integration, macos_workflow, macos_quick_action, subtitles.
+16 test files plus `conftest.py`: operations, ytdlp, audio_ops, image_ops, imaging_contract, cli_image_paths, compress, dispatch, progress, pipeline, separation, integration, macos_workflow, macos_quick_action, subtitles, audio_probe.
 
 `test_macos_quick_action.py` runs the Quick Action *shell script* under its own
 shebang with stubbed `vidtools`/`osascript`. Executing by path rather than
