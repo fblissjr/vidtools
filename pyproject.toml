@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vidtools"
-version = "0.20.1"
+version = "0.21.0"
 description = "FFmpeg + PIL + yt-dlp media processing CLI (video, image, audio)"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -13,7 +13,10 @@ requires-python = ">=3.12"
 dependencies = [
     "tqdm>=4.65.0",
     "structlog>=23.1.0",
-    "Pillow>=9.0.0",
+    # 11.3 is the first release with AVIF encode/decode built in, which is what
+    # `compress --allow-avif` and the `.avif` save path rely on. The enum APIs
+    # used throughout image_ops (Image.Resampling, Image.Palette) need >= 9.1.
+    "Pillow>=11.3.0",
     "numpy>=1.21.0",
     "yt-dlp>=2026.3.17",
     "orjson>=3.9.0",

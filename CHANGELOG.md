@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.21.0
+
+### Added
+- **Audio metadata policy — and it deliberately inverts the image/video default.** Those strip everything because their metadata is incidental; for audio it is frequently the point. Artist, title and album are what make a library work, and `convert song.mp3 song.m4a` handing back an untitled file would be a worse bug than the leak. So the same three-category model applies with different membership: descriptive tags (artist, title, album, track, genre, date) are **kept**, free-form and recorder fields (`comment`, `description`, `encoded_by`, `location`, `make`, `model`) are **dropped**. `comment` is the field that held 109 KB of generation prompt in the video case. `--preserve-metadata` keeps everything.
+  - Applies to `convert`, `trim`, `normalize`, `fade`, `resample`, `clean`, `mix` and `remove-silence`. Verified: every audio op previously carried artist, title, comment, album and date straight through.
+
+### Fixed
+- **`compress` no longer renders portrait photos sideways or drops colour profiles.** It opened images with a bare `Image.open` rather than the shared imaging core, so it skipped EXIF orientation and the ICC profile — reintroducing, through a second open path, exactly the defects 0.17.0 fixed in `image_ops`. Confirmed against a phone photo: a portrait source came out displaying landscape.
+- `subtitles` exposes `--preserve-metadata`; it applied the policy but offered no way to opt back in.
+- Raised the `Pillow` floor from `>=9.0.0` to `>=11.3.0`. The old floor would crash: `Image.Resampling`/`Image.Palette` need 9.1, and `compress` probes `features.check("avif")`, which needs 11.3 for native AVIF.
+
+### Removed
+- `requirements.txt` — a legacy duplicate of the `pyproject.toml` dependency list, referenced nowhere and still carrying the stale Pillow floor. A second source of truth for dependencies is exactly the drift this release is cleaning up.
+
+### Docs
+- `CLAUDE.md` and `README.md` brought in line with the code: removed the deleted `deploy/` section and the web-op reference, added `compress.py` and the imaging core to the architecture, corrected the test-file inventory and documented the `ffmpeg`/`pil_real` markers, and documented the metadata policy across all three media types with its remaining gaps stated rather than glossed.
+- Corrected a CLAUDE.md claim that `pillow-heif` was a supported optional dependency. Pillow 12 does AVIF natively and nothing registers a HEIF opener, so installing it would enable nothing. HEIF is unsupported; the docs now say so.
+
 ## 0.20.1
 
 All of the below were found by review of the 0.16.0-0.20.0 work and verified by execution before and after.

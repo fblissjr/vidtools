@@ -48,6 +48,7 @@ import structlog
 from numpy.lib.stride_tricks import sliding_window_view
 from PIL import Image, features
 
+from .image_ops import _open_image
 from .progress import report_progress
 
 logger = structlog.get_logger(__name__)
@@ -281,6 +282,10 @@ def _encode(img: Image.Image, fmt: str, quality: int | None, lossless: bool) -> 
     """Encode to an in-memory buffer. Returns the encoded bytes."""
     save_kwargs: dict[str, object] = {}
     target = img
+    # Dropping the colour profile silently reinterprets the pixels as sRGB.
+    profile = img.info.get("icc_profile")
+    if profile:
+        save_kwargs["icc_profile"] = profile
 
     if fmt == "jpeg":
         if target.mode != "RGB":
@@ -465,9 +470,14 @@ def recommend(
 
     Raises ValueError if nothing satisfies the constraints.
     """
-    with Image.open(input_file) as opened:
-        img = opened.convert("RGBA" if opened.mode in ("RGBA", "LA", "PA") else "RGB")
-        has_alpha = img.mode == "RGBA"
+    # Route through the imaging core rather than a bare Image.open: compress
+    # otherwise skipped EXIF orientation and the ICC profile, so a portrait
+    # phone photo came out sideways and a wide-gamut image lost its profile --
+    # the same defects fixed in image_ops, reintroduced by a second open path.
+    source = _open_image(input_file)
+    img = source.convert("RGBA" if source.mode in ("RGBA", "LA", "PA") else "RGB")
+    img.info = source.info
+    has_alpha = img.mode == "RGBA"
 
     source_size = os.path.getsize(input_file)
     content_class = _classify_content(img)

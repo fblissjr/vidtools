@@ -242,3 +242,49 @@ class TestCodecMap:
         assert AUDIO_CODEC_MAP["ogg"] == "libvorbis"
         assert AUDIO_CODEC_MAP["wav"] == "pcm_s16le"
         assert AUDIO_CODEC_MAP["aac"] == "aac"
+
+
+class TestMetadataPolicy:
+    """Audio's policy deliberately differs from image and video.
+
+    Those strip everything by default because their metadata is incidental.
+    Audio metadata is frequently the point -- artist, title and album are what
+    make a library work -- so `convert song.mp3 song.m4a` silently returning an
+    untitled file would be a worse bug than the leak. The kept and dropped sets
+    are therefore inverted relative to video, using the same three-category
+    model.
+    """
+
+    OPS = ["convert_audio", "cut_audio", "normalize_audio", "fade_audio",
+           "resample_audio", "clean_audio", "remove_silence"]
+
+    def _call(self, name, kw):
+        from vidtools import audio_ops
+        return {
+            "convert_audio": lambda: audio_ops.convert_audio("i.mp3", "o.mp3", **kw),
+            "cut_audio": lambda: audio_ops.cut_audio("i.mp3", "o.mp3", start_time="0", **kw),
+            "normalize_audio": lambda: audio_ops.normalize_audio("i.mp3", "o.mp3", **kw),
+            "fade_audio": lambda: audio_ops.fade_audio("i.mp3", "o.mp3", fade_in=1, **kw),
+            "resample_audio": lambda: audio_ops.resample_audio("i.mp3", "o.mp3", **kw),
+            "clean_audio": lambda: audio_ops.clean_audio("i.mp3", "o.mp3", **kw),
+            "remove_silence": lambda: audio_ops.remove_silence("i.mp3", "o.mp3", **kw),
+        }[name]()
+
+    @pytest.mark.parametrize("op", OPS)
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    @patch("vidtools.audio_ops.subprocess")
+    def test_drops_freeform_tags_by_default(self, mock_sub, mock_run, op):
+        mock_sub.run.return_value = MagicMock(stderr="")
+        self._call(op, {})
+        cmd = mock_run.call_args[0][0]
+        assert "comment=" in cmd, f"{op} does not drop the comment tag"
+        assert cmd[cmd.index("-map_metadata") + 1] == "0", f"{op} does not keep descriptive tags"
+
+    @pytest.mark.parametrize("op", OPS)
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    @patch("vidtools.audio_ops.subprocess")
+    def test_preserve_metadata_keeps_everything(self, mock_sub, mock_run, op):
+        mock_sub.run.return_value = MagicMock(stderr="")
+        self._call(op, {"preserve_metadata": True})
+        cmd = mock_run.call_args[0][0]
+        assert "comment=" not in cmd, f"{op} still filters with preserve_metadata=True"

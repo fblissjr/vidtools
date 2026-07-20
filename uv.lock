@@ -1853,7 +1853,7 @@ wheels = [
 
 [[package]]
 name = "vidtools"
-version = "0.20.1"
+version = "0.21.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
@@ -1881,7 +1881,7 @@ requires-dist = [
     { name = "audio-separator", extras = ["cpu"], marker = "extra == 'separation'", specifier = ">=0.30.0" },
     { name = "numpy", specifier = ">=1.21.0" },
     { name = "orjson", specifier = ">=3.9.0" },
-    { name = "pillow", specifier = ">=9.0.0" },
+    { name = "pillow", specifier = ">=11.3.0" },
     { name = "structlog", specifier = ">=23.1.0" },
     { name = "tqdm", specifier = ">=4.65.0" },
     { name = "yt-dlp", specifier = ">=2026.3.17" },

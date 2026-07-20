@@ -242,7 +242,8 @@ Examples:
         bitrate = args.bitrate
         if bitrate is None and args.quality is not None:
             bitrate = _quality_to_audio_bitrate(args.quality)
-        audio_ops.convert_audio(args.input, args.output, audio_codec=args.audio_codec, bitrate=bitrate)
+        audio_ops.convert_audio(args.input, args.output, audio_codec=args.audio_codec,
+                                bitrate=bitrate, preserve_metadata=args.preserve_metadata)
     def _convert_dispatch(args):
         # An audio-only OUTPUT extracts/encodes audio regardless of input kind,
         # so --quality maps to bitrate (not video CRF) on that path. Otherwise
@@ -338,7 +339,8 @@ Time formats: HH:MM:SS.mmm, seconds (66.5), or MM:SS"""
                              preserve_metadata=args.preserve_metadata)
     def _trim_audio(args):
         audio_ops.cut_audio(args.input, args.output, start_time=args.start_time,
-                            end_time=args.end_time, duration=args.duration)
+                            end_time=args.end_time, duration=args.duration,
+                            preserve_metadata=args.preserve_metadata)
     trim.set_defaults(func=_make_smart("trim", video=_trim_video, audio=_trim_audio))
 
     # ---------------------------------------------------------------- rotate --
@@ -479,9 +481,11 @@ For stream-copy mode, all inputs must share codec parameters."""
     subtitles.add_argument("-s", "--subs", required=True,
                            type=lambda x: is_valid_file(subtitles, x),
                            help="Subtitle file (.srt, .ass, ...)")
+    _add_preserve_metadata(subtitles)
     _add_io(subtitles, "Input video")
     def _subtitles(args):
-        operations.add_subtitles(args.input, args.output, args.subs)
+        operations.add_subtitles(args.input, args.output, args.subs,
+                                 preserve_metadata=args.preserve_metadata)
     subtitles.set_defaults(func=_subtitles)
 
     # ---------------------------------------------------------------- add-audio
@@ -594,9 +598,11 @@ Examples:
     normalize = subparsers.add_parser("normalize", help="Normalize loudness (two-pass LUFS); audio or video",
                                       formatter_class=argparse.RawTextHelpFormatter)
     normalize.add_argument("--target", type=float, default=-16.0, help="Target LUFS (default: -16)")
+    _add_preserve_metadata(normalize)
     _add_io(normalize, "Input audio or video")
     def _normalize(args, in_path, out_path):
-        audio_ops.normalize_audio(in_path, out_path, target_loudness=args.target)
+        audio_ops.normalize_audio(in_path, out_path, target_loudness=args.target,
+                                  preserve_metadata=args.preserve_metadata)
     normalize.set_defaults(func=_audio_verb(_normalize))
 
     # ---------------------------------------------------------------- fade
@@ -605,19 +611,23 @@ Examples:
     fade.add_argument("--fade-in", type=float, help="Fade-in duration (seconds)")
     fade.add_argument("--fade-out", type=float, help="Fade-out duration (seconds)")
     fade.add_argument("--total-duration", type=float, help="Total duration (required for fade-out)")
+    _add_preserve_metadata(fade)
     _add_io(fade, "Input audio or video")
     def _fade(args, in_path, out_path):
         audio_ops.fade_audio(in_path, out_path, fade_in=args.fade_in,
-                             fade_out=args.fade_out, total_duration=args.total_duration)
+                             fade_out=args.fade_out, total_duration=args.total_duration,
+                             preserve_metadata=args.preserve_metadata)
     fade.set_defaults(func=_audio_verb(_fade))
 
     # ---------------------------------------------------------------- resample
     resample = subparsers.add_parser("resample", help="Resample audio (change sample rate); audio or video",
                                      formatter_class=argparse.RawTextHelpFormatter)
     resample.add_argument("-r", "--rate", type=int, default=44100, help="Sample rate Hz (default: 44100)")
+    _add_preserve_metadata(resample)
     _add_io(resample, "Input audio or video")
     def _resample(args, in_path, out_path):
-        audio_ops.resample_audio(in_path, out_path, sample_rate=args.rate)
+        audio_ops.resample_audio(in_path, out_path, sample_rate=args.rate,
+                                 preserve_metadata=args.preserve_metadata)
     resample.set_defaults(func=_audio_verb(_resample))
 
     # ---------------------------------------------------------------- clean
@@ -654,6 +664,7 @@ Examples:
     clean.add_argument("--lra", type=float, default=11.0, help="Loudness range target (default: 11)")
     clean.add_argument("--audio-codec", dest="audio_codec", help="Audio codec (auto-detected from extension)")
     clean.add_argument("--bitrate", help="Bitrate (e.g. 320k); overrides default VBR for mp3")
+    _add_preserve_metadata(clean)
     _add_io(clean, "Input audio or video")
     def _clean(args, in_path, out_path):
         highpass = None if args.no_highpass or args.highpass == 0 else args.highpass
@@ -664,6 +675,7 @@ Examples:
             compress_ratio=args.ratio, compress_attack=args.attack, compress_release=args.release,
             loudnorm=not args.no_loudnorm, target_lufs=args.lufs, true_peak=args.true_peak,
             lra=args.lra, audio_codec=args.audio_codec, bitrate=args.bitrate,
+            preserve_metadata=args.preserve_metadata,
         )
     clean.set_defaults(func=_audio_verb(_clean))
 

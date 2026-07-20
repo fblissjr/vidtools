@@ -6,7 +6,10 @@ Handles video (FFmpeg), images (PIL), and audio (FFmpeg).
 
 ## Quick start
 
-Requires Python 3.12+, ffmpeg >= 5.1 and ffprobe in PATH. yt-dlp in PATH for URL downloads.
+Requires Python 3.12+. Video and audio verbs need ffmpeg >= 5.1 and ffprobe in
+PATH; yt-dlp in PATH for URL downloads. The image verbs are pure PIL and run on
+a machine with no ffmpeg at all — the toolchain check is scoped to the
+invocations that actually need it.
 
 ```bash
 uv sync
@@ -61,9 +64,39 @@ vidtools thumbnail -s 256 in.png thumb.png
 vidtools strip-metadata in.jpg clean.jpg
 vidtools optimize -q 80 --max-width 1920 in.png small.jpg
 vidtools adjust --brightness 1.2 --contrast 1.1 --rotation 90 --flip horizontal in.png out.png
+vidtools adjust --rotation 45 --fill white in.png out.png   # corner fill for off-axis rotation
 ```
 
+`--fill` sets the colour of the corners a non-right-angle rotation exposes
+(colour name or `#rrggbb`; transparent by default).
+
 (For image resize/convert/crop/rotate/info, use the universal verbs above.)
+
+#### compress — shrink an image without guessing
+
+`optimize` recompresses into the format you name. `compress` picks the format
+*and* the quality by measuring: it encodes candidates, scores each against the
+original with SSIM, and writes the smallest one that clears a fidelity target.
+
+```bash
+vidtools compress photo.jpg                          # -> photo_compressed.<winning ext>
+vidtools compress photo.jpg small                    # winner supplies the extension
+vidtools compress photo.jpg out.webp                 # or name the format yourself
+vidtools compress photo.jpg --dry-run                # rank candidates, write nothing
+vidtools compress photo.jpg --target-ssim 0.99       # fidelity target 0-1 (default 0.98)
+vidtools compress photo.jpg --max-size 500k          # byte budget; maximises fidelity within it
+vidtools compress logo.png --lossless                # exact encodes only, smallest wins
+vidtools compress photo.jpg --allow-avif             # opt into AVIF
+```
+
+Defaults to PNG/JPEG/WebP — the formats the Claude and Gemini vision APIs
+accept. AVIF usually compresses far better but no major vision API decodes it,
+so it is opt-in (naming a `.avif` output implies `--allow-avif`). Text and UI
+screenshots are detected and held to a stricter target, since SSIM barely
+registers the ringing that makes glyphs mushy.
+
+Pillow-only — no `cwebp`/`avifenc` subprocesses. A build without AVIF or WebP
+degrades to the formats it has rather than failing.
 
 ### Audio commands (FFmpeg)
 
@@ -105,6 +138,50 @@ vidtools pipeline in.mp4 out.mp4 \
 ```
 
 3-5x faster than running separate commands; no intermediate files; no compounding quality loss. Supports trim (alias cut), resize, crop, rotate, sanitize, subtitles, convert. Excludes multi-input or different-output ops (concat, slideshow, extract-*, add-audio, preset).
+
+### Metadata: what gets stripped
+
+**Identifying metadata is removed by default.** GPS coordinates, camera
+make/model and capture timestamps do not survive into output. Pass
+`--preserve-metadata` to keep them.
+
+Rendering data is always preserved: EXIF orientation (baked into the pixels on
+open, so the output is upright rather than tagged) and the ICC colour profile.
+Dropping those would change how the image looks, which is a pixel change in all
+but name.
+
+```bash
+vidtools resize phone-photo.jpg small.jpg                      # GPS gone
+vidtools resize phone-photo.jpg small.jpg --preserve-metadata  # GPS kept
+```
+
+The original file is untouched either way — these verbs write a new file. That
+asymmetry is the reason for the default: the original keeps everything, while a
+location you published by accident does not come back.
+
+Granularity differs by medium. For **images** the kept set is an allowlist
+(copyright, artist, description), so `--preserve-metadata` restores authorship
+without re-admitting GPS. For **video**, ffmpeg's metadata mapping is
+all-or-nothing at the container level, so the flag keeps everything, location
+included.
+
+Verbs that take `--preserve-metadata`: `convert`, `resize`, `crop`, `trim`,
+`rotate`, `concat`, `add-audio`, `match-duration`, `thumbnail`, `optimize`,
+`adjust`, `pipeline`, `subtitles`, `normalize`, `fade`, `resample`, `clean`.
+`sanitize` and `strip-metadata` always strip — that is their job.
+
+**Audio inverts the default, on purpose.** For a photo or a clip, metadata is
+incidental. For audio it is frequently the point: artist, title and album are
+what make a library work, and `convert song.mp3 song.m4a` handing back an
+untitled file would be a worse bug than the leak. So audio **keeps** the
+descriptive tags (artist, title, album, track, genre, date) and **drops** the
+free-form and recorder ones (`comment`, `description`, `encoded_by`, `location`,
+`make`, `model`). `comment` is the one that matters — it is where an entire
+generation prompt turned up in the video case.
+
+**Not yet covered.** The policy does not reach everything:
+
+- `extract-audio`, `extract-frames` and `slideshow` still carry source metadata.
 
 ### Presets
 
