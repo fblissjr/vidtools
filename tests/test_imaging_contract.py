@@ -307,3 +307,38 @@ def test_strip_metadata_does_not_requantize_jpeg(tmp_path):
         f"stripping metadata shrank a quality-95 JPEG from {before} to {after} bytes -- "
         "the encoder re-quantized at its default quality"
     )
+
+
+# --- G5: the extension tables must not drift apart ------------------------
+#
+# `_FORMAT_MODES` (image_ops) says what we can *write*; `IMAGE_EXTS` (utils)
+# says what the CLI dispatches as an image, i.e. what we can *read*. They are
+# separate tables serving different questions, and they drifted: `compress
+# --allow-avif` wrote a .avif that `vidtools info` then refused to open. A tool
+# that emits a file it cannot read back is the bug worth pinning.
+#
+# `.gif` is the one deliberate exception -- a still-encoder target that
+# `_detect_kind` routes to video, since an animated GIF is a video to every
+# other verb.
+
+WRITE_ONLY_NOT_IMAGE_INPUT = {".gif"}
+
+
+def test_every_writable_format_is_readable_back():
+    from vidtools.image_ops import _FORMAT_MODES
+    from vidtools.utils import IMAGE_EXTS
+    writable = set(_FORMAT_MODES) - WRITE_ONLY_NOT_IMAGE_INPUT
+    unreadable = writable - IMAGE_EXTS
+    assert not unreadable, (
+        f"can write {sorted(unreadable)} but the CLI will not dispatch them as "
+        "images -- the tool would emit a file it cannot open"
+    )
+
+
+def test_gif_stays_video_for_dispatch():
+    """Guards the exception above: .gif is writable as a still but must keep
+    routing to video, or every video verb loses GIF support."""
+    from vidtools.cli import _detect_kind
+    from vidtools.utils import IMAGE_EXTS
+    assert _detect_kind("x.gif") == "video"
+    assert ".gif" not in IMAGE_EXTS

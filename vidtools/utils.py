@@ -28,7 +28,17 @@ logger = structlog.get_logger(__name__)
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv",
               ".m4v", ".mpg", ".mpeg", ".gif"}
 AUDIO_EXTS = {".mp3", ".wav", ".flac", ".aac", ".ogg", ".opus", ".m4a", ".wma"}
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif"}
+# Must stay a superset of what `image_ops._FORMAT_MODES` can write, minus `.gif`
+# (a still-encoder target that dispatches as video, since an animated GIF is a
+# video to every other verb). `tests/test_imaging_contract.py` pins that
+# invariant: `.avif` was writable via `compress --allow-avif` but absent here,
+# so the tool emitted files it then refused to open.
+#
+# `.mpo` is read-only -- Pillow decodes it and `_open_image` handles its
+# is_animated quirk, but nothing writes it. It is here because real iPhone
+# photos arrive as MPO, not because anything produces one.
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif",
+              ".avif", ".mpo"}
 
 # --- Utility Functions ---
 

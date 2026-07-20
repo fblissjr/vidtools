@@ -38,77 +38,8 @@ fi
 mkdir -p "$BUNDLE/Contents"
 SCRIPT_SRC="$REPO_ROOT/macos/compress-image.sh"
 
-BIN="$BIN" SCRIPT_SRC="$SCRIPT_SRC" python3 - "$BUNDLE/Contents/document.wflow" <<'PY'
-import os, plistlib, sys
-
-script = open(os.environ["SCRIPT_SRC"]).read().replace("@VIDTOOLS_BIN@", os.environ["BIN"])
-
-action = {"action": {
-    "AMAccepts": {"Container": "List", "Optional": True, "Types": ["com.apple.cocoa.string"]},
-    "AMActionVersion": "2.0.3",
-    "AMApplication": ["Automator"],
-    "AMParameterProperties": {k: {} for k in
-        ("COMMAND_STRING", "CheckedForUserDefaultShell", "inputMethod", "shell", "source")},
-    "AMProvides": {"Container": "List", "Types": ["com.apple.cocoa.string"]},
-    "ActionBundlePath": "/System/Library/Automator/Run Shell Script.action",
-    "ActionName": "Run Shell Script",
-    "ActionParameters": {
-        "COMMAND_STRING": script,
-        "CheckedForUserDefaultShell": True,
-        "inputMethod": 1,          # pass the selection as arguments, not stdin
-        "shell": "/bin/zsh",
-        "source": "",
-    },
-    "BundleIdentifier": "com.apple.RunShellScript",
-    "CFBundleVersion": "2.0.3",
-    "CanShowSelectedItemsWhenRun": False,
-    "CanShowWhenRun": True,
-    "Category": ["AMCategoryUtilities"],
-    "Class Name": "RunShellScriptAction",
-    "InputUUID": "vidtools-compress-in",
-    "OutputUUID": "vidtools-compress-out",
-    "UUID": "vidtools-compress-action",
-    "UnlocalizedApplications": ["Automator"],
-    "arguments": {},
-    "isViewVisible": 1,
-}}
-
-FINDER = "/System/Library/CoreServices/Finder.app"
-
-plistlib.dump({
-    "AMApplicationBuild": "526",
-    "AMApplicationVersion": "2.10",
-    "AMDocumentVersion": "2",
-    "actions": [action],
-    "connectors": {},
-    # Every key here is present in a Quick Action that Automator itself wrote,
-    # and was arrived at by diffing against one. A hand-written subset that
-    # looks sufficient is not: an earlier version carried only the six
-    # service* / presentationMode / workflowTypeIdentifier keys, which loads
-    # without complaint and never appears in the Finder menu. The
-    # non-service-prefixed twins (applicationBundleID, inputTypeIdentifier,
-    # processesInput) are what Finder actually reads; the service* ones alone
-    # are not enough. presentationMode is 15, not 512.
-    "workflowMetaData": {
-        "applicationBundleID": "com.apple.finder",
-        "applicationBundleIDsByPath": {FINDER: "com.apple.finder"},
-        "applicationPath": FINDER,
-        "applicationPaths": [FINDER],
-        "inputTypeIdentifier": "com.apple.Automator.fileSystemObject.image",
-        "outputTypeIdentifier": "com.apple.Automator.nothing",
-        "presentationMode": 15,
-        "processesInput": False,
-        "serviceApplicationBundleID": "com.apple.finder",
-        "serviceApplicationPath": FINDER,
-        "serviceInputTypeIdentifier": "com.apple.Automator.fileSystemObject.image",
-        "serviceOutputTypeIdentifier": "com.apple.Automator.nothing",
-        "serviceProcessesInput": False,
-        "systemImageName": "NSActionTemplate",
-        "useAutomaticInputType": False,
-        "workflowTypeIdentifier": "com.apple.Automator.servicesMenu",
-    },
-}, open(sys.argv[1], "wb"))
-PY
+BIN="$BIN" SCRIPT_SRC="$SCRIPT_SRC" python3 "$REPO_ROOT/macos/make_workflow.py" \
+    "$BUNDLE/Contents/document.wflow"
 
 cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

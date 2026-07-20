@@ -136,7 +136,13 @@ vidtools pipeline in.mp4 out.mp4 trim --start 60 --end 90 resize -p 0.5 convert 
 uv run pytest tests/ -v
 ```
 
-12 test files plus `conftest.py`: operations, ytdlp, audio_ops, image_ops, imaging_contract, cli_image_paths, compress, dispatch, progress, pipeline, separation, integration.
+13 test files plus `conftest.py`: operations, ytdlp, audio_ops, image_ops, imaging_contract, cli_image_paths, compress, dispatch, progress, pipeline, separation, integration, macos_workflow.
+
+`test_macos_workflow.py` covers the generated Automator bundle. It exists
+because the Quick Action shipped three defects the rest of the suite could not
+see — the bundle was built inside a shell heredoc, and macOS reports no error
+for a structurally-valid-but-unregisterable workflow. Pure-plist assertions; no
+Automator, no Finder, no install.
 
 Two real-toolchain tiers, separated by marker rather than by file:
 
