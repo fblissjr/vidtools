@@ -126,6 +126,8 @@ blanking specific keys, avoiding a separate ffprobe pass.
 `extract-audio`, `extract-frames`, `slideshow`.
 Added to a parser via `cli._add_preserve_metadata`.
 
+**`README.md` restates this policy and duplicates the verb list.** Update both, or it silently drifts — it claimed three verbs still leaked for three versions after they were fixed.
+
 `extract-audio` takes the **audio** policy rather than the video one — its
 output is an audio file, so title/artist survive while location and comment are
 blanked. `extract-frames` and `slideshow` strip.
@@ -185,6 +187,18 @@ Both markers are registered in `pyproject.toml` under `--strict-markers`, so a t
 
 Everything else mocks `run_ffmpeg`.
 
+### Verify the Quick Action actually registered
+
+```bash
+SERVICES=$HOME/Library/Services   # path-privacy: ignore -- the OS decides where Quick Actions live
+
+/System/Library/CoreServices/pbs -dump_pboard | grep 'Compress Image'   # registered with the services DB
+plutil -lint "$SERVICES/Compress Image.workflow"/Contents/*             # both plists parse
+plutil -p <a working .workflow>/Contents/document.wflow                 # diff against one Automator wrote
+```
+
+`install.sh` printing "installed:" only means files were written. macOS silently ignores a bundle whose metadata is incomplete, so check the services DB, not the filesystem.
+
 ### Generate a test video for manual verification
 
 ```bash
@@ -205,6 +219,8 @@ ffmpeg -f lavfi -i testsrc=duration=4:size=640x480:rate=30 -y /tmp/test.mp4
 
 ## Testing gotchas
 
+- **Confirm a new test fails for the right reason.** Reintroduce the exact defect and check it goes red. This caught four tests that passed without testing anything: `test_flip_horizontal` asserted only that dimensions survived (so does a no-op), `test_normalize_builds_loudnorm` mocked a stderr shape ffmpeg never emits (so it ran the single-pass fallback for its whole life), and two Quick Action tests were satisfied by a shebang string rather than the behaviour.
+- **Review subagents may lack a shell.** Findings reasoned from docs rather than execution are leads, not results — re-run them locally before acting. Here that refuted a claimed glob-metacharacter bug and a claimed argparse leading-dash bug, while a third finding (a bash 3.2 empty-array crash) was real.
 - `monkeypatch.setattr("vidtools.video_ops.run_ffmpeg", mock)` — NOT `vidtools.operations.run_ffmpeg`.
 - Thread-local progress sink could leak between tests. The `progress_context()` CM auto-clears, and `conftest._isolate_progress_sink` is an autouse suite-wide safety net (it used to live only in `test_progress.py`, so isolation depended on which file a leak originated in).
 - Image op tests can use real in-memory PIL images (cheap, no ffmpeg required). Use the shared `conftest.py` fixtures rather than rolling your own: `quadrant_array`/`sample_image` (four distinct quadrants — a flat fill makes flip/rotate correctness untestable in principle, since a real flip and a no-op are pixel-identical on it), `palette_png`, `oriented_jpeg`, `private_jpeg` (carries GPS, for the metadata policy), `wide_gamut_png`/`icc_bytes`, `photo_png`, and `capture_ffmpeg` for command-shape assertions.
