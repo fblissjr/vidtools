@@ -4,7 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from .utils import run_ffmpeg, logger
+from .utils import run_ffmpeg, logger, require_encoder
 from .progress import report_progress
 
 # Map output extension to ffmpeg audio codec
@@ -64,6 +64,9 @@ def convert_audio(input_file: str, output_file: str, audio_codec: str | None = N
                   bitrate: str | None = None, sample_rate: int | None = None):
     """Convert audio format with codec auto-detection from output extension."""
     codec = _auto_codec(output_file, audio_codec)
+    # .ogg maps to libvorbis, which Homebrew's slim formula omits -- name the
+    # gap before ffmpeg emits "Unknown encoder 'libvorbis'".
+    require_encoder(codec)
     command = ["ffmpeg", "-y", "-i", input_file, "-vn", "-c:a", codec]
     if bitrate:
         command.extend(["-b:a", bitrate])

@@ -147,3 +147,83 @@ def run_ffmpeg(command: list[str]) -> None:
 
     logger.info("FFmpeg command completed successfully")
     report_progress(100, "Complete")
+
+
+# --- ffmpeg build capabilities ---
+#
+# One probe for every capability question, next to check_ffmpeg_installed.
+# Homebrew's slim formula omits libass, libaom-av1 and libvorbis, so several
+# features need to ask; separate hand-rolled probes would drift apart.
+
+#: Populated per capability kind on the first successful probe. A *failed* probe
+#: is deliberately not cached: an lru_cache would pin a transient timeout for the
+#: process lifetime, leaving a capability reported as missing until restart.
+_CAPABILITY_CACHE: dict[str, set[str]] = {}
+
+
+def _ffmpeg_capabilities(kind: str) -> set[str] | None:
+    """Names ffmpeg exposes for `kind` ("filters" or "encoders").
+
+    Returns None if the probe itself failed -- which is not "none available".
+    Callers must distinguish: reporting a missing binary as a missing library
+    sends the user to the wrong fix.
+
+    One probe for every capability question. Homebrew's slim formula omits
+    libass, libaom-av1 and libvorbis, so three separate features need to ask
+    this, and three hand-rolled subprocess probes would drift apart.
+    """
+    if kind in _CAPABILITY_CACHE:
+        return _CAPABILITY_CACHE[kind]
+    try:
+        out = subprocess.run(["ffmpeg", "-hide_banner", f"-{kind}"],
+                             capture_output=True, text=True, timeout=15).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    names = set()
+    for line in out.splitlines():
+        parts = line.split()
+        # "  T.. scale  V->V  Scale ..." / " V..... libx264  H.264 ..."
+        # -- the name is the second field in both listings.
+        if len(parts) >= 2 and parts[0] not in ("Filters:", "Encoders:", "="):
+            names.add(parts[1])
+    _CAPABILITY_CACHE[kind] = names
+    return names
+
+
+def _ffmpeg_filters() -> set[str] | None:
+    return _ffmpeg_capabilities("filters")
+
+
+def _ffmpeg_has_filter(name: str) -> bool | None:
+    """True/False if known, None if the build could not be probed."""
+    filters = _ffmpeg_filters()
+    return None if filters is None else name in filters
+
+
+def _ffmpeg_has_encoder(name: str) -> bool | None:
+    """True/False if known, None if the build could not be probed."""
+    encoders = _ffmpeg_capabilities("encoders")
+    return None if encoders is None else name in encoders
+
+
+#: Encoders that Homebrew's slim `ffmpeg` formula omits, with what to do about
+#: it. Anything absent here fails with ffmpeg's own error, which is right for a
+#: genuinely exotic codec but wrong for these three -- they are missing on a
+#: default macOS install, so the failure is common rather than exceptional.
+_ENCODER_HINTS = {
+    "libaom-av1": "AV1 encoding needs libaom-av1",
+    "libvorbis": "Ogg Vorbis output needs libvorbis",
+    "libx265": "HEVC encoding needs libx265",
+}
+
+
+def require_encoder(name: str) -> None:
+    """Raise a message naming the gap before ffmpeg emits a cryptic one."""
+    if _ffmpeg_has_encoder(name) is not False:
+        return  # present, or unprobeable -- let ffmpeg speak for itself
+    hint = _ENCODER_HINTS.get(name, f"This output needs the '{name}' encoder")
+    raise FfmpegError(
+        f"{hint}, which this ffmpeg was built without. On macOS: "
+        "'brew install ffmpeg-full' (the plain 'ffmpeg' formula carries ten "
+        "dependencies and omits it)."
+    )

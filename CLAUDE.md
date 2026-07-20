@@ -21,7 +21,8 @@ in this codebase, all verified against a slim build:
 - `subtitles` burn-in needs libass and is unavailable; `add_subtitles` checks for
   the filter and says so rather than emitting a filter-parse error naming no cause.
 - The `av1_quality` preset needs libaom-av1, and `.ogg` output needs libvorbis.
-  Neither is capability-checked yet — they fail with a raw ffmpeg error.
+  Both are capability-checked via `utils.require_encoder`, which names the gap
+  and points at `ffmpeg-full`.
 - libwebp is already routed around: `screenshot` and `compress` encode WebP
   through PIL, so they work regardless.
 
@@ -51,7 +52,12 @@ Three call sites legitimately need the *undecoded* original — `strip_image_met
 - **compress.py** — measured format *and* quality search for images. Encodes candidates with Pillow (no `cwebp`/`avifenc`/`oxipng` subprocesses), scores each against the original with SSIM, and writes the smallest that meets the fidelity target. Full-image SSIM is authoritative; the high-variance probe crop only narrows the starting bracket and can never veto a candidate (it vetoed 7 of 18 real images before 0.18.0). Defaults to PNG/JPEG/WebP — AVIF compresses roughly 2x better but no major vision API decodes it, so it's opt-in behind `--allow-avif` (naming a `.avif` output implies the flag). A content classifier (flat-run fraction + hard-edge density) raises the target to `FLAT_TARGET_SSIM` for text/line art, whose ringing SSIM barely registers. Caveat stated in the module docstring: SSIM is a mediocre perceptual metric, chosen because it's computable with numpy alone and is monotonic in encode quality. Opens via `_open_image`, so EXIF orientation is applied and the ICC profile is carried into every candidate encode — it went through a bare `Image.open` until 0.21.0, which rendered portrait phone photos sideways.
 - **audio_ops.py** — FFmpeg audio operations including two-pass loudnorm in `normalize_audio` and the single-pass vocal cleanup chain in `clean_audio`.
 - **separation.py** — Audio source separation behind a `SeparationBackend` Protocol. Current backend (`AudioSeparatorBackend`) wraps `audio-separator`. Optional extra: `uv sync --extra separation`. Caches the loaded model by `(model_name, output_dir)` so back-to-back calls don't reload weights.
-- **utils.py** — `run_ffmpeg(command)`. Single mode. Always raises `FfmpegError`. Reports progress via thread-local sink. Coalesces per-frame events to per-percent (no duplicate updates). Also contains `check_ffmpeg_installed()` (>= 5.1) and `is_valid_file()`.
+- **utils.py** — `run_ffmpeg(command)`, plus the ffmpeg **capability probe**
+  (`_ffmpeg_capabilities`, `_ffmpeg_has_filter`, `_ffmpeg_has_encoder`,
+  `require_encoder`). One probe for filters and encoders both; a *failed* probe
+  returns `None` and is deliberately not cached, since caching a transient
+  timeout would report a capability as missing until restart. `None` must never
+  be treated as "absent" — that reports a missing binary as a missing library. Single mode. Always raises `FfmpegError`. Reports progress via thread-local sink. Coalesces per-frame events to per-percent (no duplicate updates). Also contains `check_ffmpeg_installed()` (>= 5.1) and `is_valid_file()`.
 - **progress.py** — Thread-local progress sink (~50 lines). `set_progress_sink`, `get_progress_sink`, `report_progress`, `progress_context` (CM with guaranteed cleanup), `FfmpegError`. Same pattern as Python `logging` / Flask `g`.
 
 - **pipeline.py** — `Pipeline` and `PipelineStep`. Chains video ops into a single ffmpeg invocation with combined `-vf` filter chain. Validates: at most one of each step, no `--copy` (filters require re-encode), `sanitize` requires `--manual-crop`. Cut input args pulled to before `-i`; convert always terminal.

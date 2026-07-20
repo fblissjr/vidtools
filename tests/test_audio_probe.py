@@ -97,3 +97,40 @@ class TestGetAudioInfo:
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(Exception):
             get_audio_info(str(tmp_path / "nope.wav"))
+
+
+class TestEncoderCapabilityGuard:
+    """Homebrew's slim ffmpeg omits libaom-av1 and libvorbis, so `.ogg` output
+    and the av1_quality preset fail on a default macOS install. They must name
+    the gap rather than emit ffmpeg's 'Unknown encoder'."""
+
+    def test_missing_encoder_names_the_gap(self):
+        from vidtools import utils
+        from vidtools.progress import FfmpegError
+        import unittest.mock as m
+        with m.patch.object(utils, "_ffmpeg_has_encoder", lambda n: False):
+            with pytest.raises(FfmpegError, match="libvorbis"):
+                utils.require_encoder("libvorbis")
+
+    def test_present_encoder_passes(self):
+        from vidtools import utils
+        import unittest.mock as m
+        with m.patch.object(utils, "_ffmpeg_has_encoder", lambda n: True):
+            utils.require_encoder("libvorbis")  # must not raise
+
+    def test_unprobeable_build_does_not_block(self):
+        """None means 'could not ask'. Blocking there would turn a missing
+        ffmpeg into a bogus 'missing codec' report."""
+        from vidtools import utils
+        import unittest.mock as m
+        with m.patch.object(utils, "_ffmpeg_has_encoder", lambda n: None):
+            utils.require_encoder("libvorbis")  # must not raise
+
+    def test_encoders_and_filters_share_one_probe(self):
+        """Two capability kinds, one implementation -- three hand-rolled
+        subprocess probes would drift apart."""
+        from vidtools import utils
+        utils._CAPABILITY_CACHE.clear()
+        assert "libx264" in (utils._ffmpeg_capabilities("encoders") or set())
+        assert "scale" in (utils._ffmpeg_capabilities("filters") or set())
+        assert set(utils._CAPABILITY_CACHE) == {"encoders", "filters"}

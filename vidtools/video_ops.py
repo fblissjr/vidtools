@@ -9,7 +9,10 @@ from pathlib import Path
 from PIL import Image, ImageOps
 import numpy as np
 
-from .utils import run_ffmpeg, logger, VIDEO_EXTS, AUDIO_EXTS
+from .utils import (
+    run_ffmpeg, logger, VIDEO_EXTS, AUDIO_EXTS,
+    _ffmpeg_has_filter, _ffmpeg_has_encoder, require_encoder,
+)
 from .progress import FfmpegError
 from .image_ops import convert_image
 from .audio_ops import AUDIO_CODEC_MAP, _auto_codec
@@ -77,6 +80,9 @@ def _apply_encode_options(command: list, video_codec: str | None, audio_codec: s
                           crf: int | None, hwaccel: bool):
     """Append video/audio encoder + quality flags. Handles hwaccel and crf=0 (lossless)."""
     encoder = _get_video_encoder(video_codec or DEFAULT_VIDEO_CODEC, hwaccel)
+    # Catches the av1_quality / hevc_quality presets on a build without
+    # libaom-av1 / libx265, which is the default Homebrew install.
+    require_encoder(encoder)
     command.extend(["-c:v", encoder, "-c:a", audio_codec or DEFAULT_AUDIO_CODEC])
     if hwaccel:
         command.extend(["-q:v", str(crf if crf is not None else 50)])
@@ -187,6 +193,10 @@ def convert_format(input_file, output_file, format_type, video_codec=None, audio
         command.extend(["-vf", "fps=10,scale=320:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"])
     else:
         encoder = _get_video_encoder(video_codec or DEFAULT_VIDEO_CODEC, hwaccel)
+        # convert_format builds -c:v itself rather than going through
+        # _apply_encode_options, so the guard is needed on both paths. This is
+        # the one the av1_quality / hevc_quality presets take.
+        require_encoder(encoder)
         command.extend(["-c:v", encoder])
         command.extend(["-c:a", audio_codec or DEFAULT_AUDIO_CODEC])
         if video_bitrate: command.extend(["-b:v", video_bitrate])
@@ -323,43 +333,6 @@ def crop_video(input_file, output_file, width, height, x, y, preserve_metadata=F
     _add_metadata_policy(command, preserve_metadata)
     command.append(output_file)
     run_ffmpeg(command)
-
-
-#: Populated on the first successful probe. A *failed* probe is deliberately not
-#: cached: an lru_cache would pin a transient timeout for the process lifetime,
-#: leaving a capability reported as missing until restart.
-_FILTER_CACHE: set[str] | None = None
-
-
-def _ffmpeg_filters() -> set[str] | None:
-    """Filter names this ffmpeg exposes, or None if the probe itself failed.
-
-    None is not "no filters" -- it means we could not ask (ffmpeg absent, or the
-    probe timed out). Callers must distinguish the two: reporting a missing
-    binary as a missing library sends the user to the wrong fix.
-    """
-    global _FILTER_CACHE
-    if _FILTER_CACHE is not None:
-        return _FILTER_CACHE
-    try:
-        out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"],
-                             capture_output=True, text=True, timeout=15).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    names = set()
-    for line in out.splitlines():
-        parts = line.split()
-        # "  T.. scale  V->V  Scale the input video." -- name is the second field.
-        if len(parts) >= 2 and parts[0] not in ("Filters:", "="):
-            names.add(parts[1])
-    _FILTER_CACHE = names
-    return names
-
-
-def _ffmpeg_has_filter(name: str) -> bool | None:
-    """True/False if known, None if the build could not be probed."""
-    filters = _ffmpeg_filters()
-    return None if filters is None else name in filters
 
 
 def add_subtitles(input_file, output_file, subtitles_file, preserve_metadata=False):

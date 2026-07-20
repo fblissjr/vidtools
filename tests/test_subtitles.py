@@ -134,13 +134,13 @@ def test_unprobeable_ffmpeg_does_not_blame_libass(tmp_path):
 @pytest.mark.ffmpeg
 def test_failed_probe_is_not_cached(tmp_path):
     """An lru_cache would pin a transient timeout for the process lifetime."""
-    from vidtools import video_ops
+    from vidtools import utils
     import unittest.mock as m
-    video_ops._FILTER_CACHE = None
-    with m.patch.object(video_ops.subprocess, "run", side_effect=OSError("boom")):
-        assert video_ops._ffmpeg_filters() is None
-    assert video_ops._FILTER_CACHE is None, "failure was cached"
-    assert video_ops._ffmpeg_filters() is not None, "probe did not retry"
+    utils._CAPABILITY_CACHE.clear()
+    with m.patch.object(utils.subprocess, "run", side_effect=OSError("boom")):
+        assert utils._ffmpeg_capabilities("filters") is None
+    assert not utils._CAPABILITY_CACHE, "failure was cached"
+    assert utils._ffmpeg_capabilities("filters") is not None, "probe did not retry"
 
 
 @pytest.mark.ffmpeg
