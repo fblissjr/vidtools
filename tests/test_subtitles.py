@@ -113,15 +113,34 @@ def test_missing_libass_gives_an_actionable_error(tmp_path):
     lacks libass."""
     from vidtools.progress import FfmpegError
     from vidtools import video_ops
-    video_ops._ffmpeg_has_filter.cache_clear()
-    try:
-        video_ops._ffmpeg_has_filter.__wrapped__  # ensure it is the cached fn
-        import unittest.mock as m
-        with m.patch.object(video_ops, "_ffmpeg_has_filter", lambda n: False):
-            with pytest.raises(FfmpegError, match="libass"):
-                video_ops.add_subtitles("in.mp4", "out.mp4", "s.srt")
-    finally:
-        video_ops._ffmpeg_has_filter.cache_clear()
+    import unittest.mock as m
+    with m.patch.object(video_ops, "_ffmpeg_has_filter", lambda n: False):
+        with pytest.raises(FfmpegError, match="libass"):
+            video_ops.add_subtitles("in.mp4", "out.mp4", "s.srt")
+
+
+@pytest.mark.ffmpeg
+def test_unprobeable_ffmpeg_does_not_blame_libass(tmp_path):
+    """A failed probe (ffmpeg absent, or timed out) returns None. Treating None
+    as "filter missing" would tell someone with no ffmpeg to install libass."""
+    from vidtools import video_ops
+    import unittest.mock as m
+    with m.patch.object(video_ops, "_ffmpeg_has_filter", lambda n: None):
+        with m.patch.object(video_ops, "run_ffmpeg") as run:
+            video_ops.add_subtitles("in.mp4", "out.mp4", "s.srt")
+    assert run.called, "a failed probe must not block the attempt"
+
+
+@pytest.mark.ffmpeg
+def test_failed_probe_is_not_cached(tmp_path):
+    """An lru_cache would pin a transient timeout for the process lifetime."""
+    from vidtools import video_ops
+    import unittest.mock as m
+    video_ops._FILTER_CACHE = None
+    with m.patch.object(video_ops.subprocess, "run", side_effect=OSError("boom")):
+        assert video_ops._ffmpeg_filters() is None
+    assert video_ops._FILTER_CACHE is None, "failure was cached"
+    assert video_ops._ffmpeg_filters() is not None, "probe did not retry"
 
 
 @pytest.mark.ffmpeg

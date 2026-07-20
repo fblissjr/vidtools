@@ -120,37 +120,17 @@ def _warn_large_decode(input_file: str) -> None:
 
 
 @contextmanager
-def _open_raw(input_file: str):
-    """`Image.open` with hostile-input errors translated to `ValueError`.
+def _pil_errors_as_value_error(input_file: str):
+    """Translate Pillow's own exceptions into `ValueError`.
 
-    Raw: no orientation applied, no ICC handling. Use `_open_image` for anything
-    that renders pixels. This exists for the three call sites that legitimately
-    need the undecoded original -- `strip_image_metadata` edits the container
-    rather than re-rendering, and the two inspectors must not transpose what
-    they are reporting on -- but which still have to fail cleanly.
-
-    Pillow's own exceptions are not caught by the CLI entrypoint, so without
-    this they reach the user as a traceback that also prints absolute paths.
+    Scoped deliberately narrowly by callers: wrap the *open*, and the *decode*
+    where a decode failure really is a read failure. Do not wrap arbitrary
+    caller code -- an earlier version wrapped the whole `yield` of `_open_raw`,
+    so an OSError raised while the body wrote its output surfaced as
+    "could not be read as an image".
     """
     try:
-        with warnings.catch_warnings():
-            # Pillow warns between its soft limit (~89 MP) and its hard limit
-            # (2x that, where it raises). Those images are legitimate -- a 100 MP
-            # panorama is not an attack -- so the warning is converted to a
-            # one-line notice rather than suppressed: the user still learns the
-            # decode is large, without a stack-trace-shaped message quoting an
-            # internal venv path and the words "DOS attack".
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            try:
-                with Image.open(input_file) as handle:
-                    yield handle
-                    return
-            except Image.DecompressionBombWarning:
-                pass
-        _warn_large_decode(input_file)
-        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
-        with Image.open(input_file) as handle:
-            yield handle
+        yield
     except Image.DecompressionBombError as exc:
         raise ValueError(
             f"{input_file}: image is too large to process safely ({exc}). "
@@ -163,6 +143,48 @@ def _open_raw(input_file: str):
         ) from exc
     except OSError as exc:
         raise ValueError(f"{input_file}: could not be read as an image ({exc}).") from exc
+
+
+def _open_guarded(input_file: str) -> Image.Image:
+    """`Image.open` with the bomb guard reported in the tool's own voice.
+
+    Every `simplefilter` call sits inside its own `catch_warnings()` block. An
+    earlier version called `simplefilter("ignore", ...)` after the block had
+    exited, which permanently mutated the process-global warnings filter: one
+    large image silenced `DecompressionBombWarning` for everything running in
+    that interpreter, including unrelated libraries and later tests.
+    """
+    with _pil_errors_as_value_error(input_file):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                return Image.open(input_file)
+        except Image.DecompressionBombWarning:
+            pass  # legitimate but large; fall through to a reported open
+
+    _warn_large_decode(input_file)
+    with _pil_errors_as_value_error(input_file):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            return Image.open(input_file)
+
+
+@contextmanager
+def _open_raw(input_file: str):
+    """`Image.open` with hostile-input errors translated to `ValueError`.
+
+    Raw: no orientation applied, no ICC handling. Use `_open_image` for anything
+    that renders pixels. This exists for the three call sites that legitimately
+    need the undecoded original -- `strip_image_metadata` edits the container
+    rather than re-rendering, and the two inspectors must not transpose what
+    they are reporting on -- but which still have to fail cleanly.
+
+    Only the *open* is guarded. Exceptions raised by the caller's body
+    propagate unchanged, so a write failure is not reported as a read failure.
+    """
+    handle = _open_guarded(input_file)
+    with handle:
+        yield handle
 
 
 def _open_image(input_file: str) -> Image.Image:
@@ -185,7 +207,10 @@ def _open_image(input_file: str) -> Image.Image:
     disk and about 1 GB in memory. Pillow refuses those by default; this only
     changes how the refusal is reported.
     """
-    with _open_raw(input_file) as handle:
+    # The decode happens inside this body (exif_transpose), and here a decode
+    # failure genuinely is a read failure -- a truncated file is unreadable, not
+    # a caller error. So this body IS wrapped, unlike `_open_raw`'s.
+    with _open_raw(input_file) as handle, _pil_errors_as_value_error(input_file):
         if getattr(handle, "is_animated", False) and handle.format in _ANIMATED_FORMATS:
             # Silently keeping frame 1 discarded the rest: a real 239-frame,
             # 20 MB animated WebP came out as a single 52 KB still. `.gif` is

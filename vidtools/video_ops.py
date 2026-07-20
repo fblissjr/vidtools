@@ -1,4 +1,3 @@
-import functools
 import platform
 import subprocess
 import re
@@ -326,16 +325,41 @@ def crop_video(input_file, output_file, width, height, x, y, preserve_metadata=F
     run_ffmpeg(command)
 
 
-@functools.lru_cache(maxsize=None)
-def _ffmpeg_has_filter(name: str) -> bool:
-    """Whether this ffmpeg build exposes `name`. Cached: it cannot change
-    mid-process and `-filters` lists hundreds of entries."""
+#: Populated on the first successful probe. A *failed* probe is deliberately not
+#: cached: an lru_cache would pin a transient timeout for the process lifetime,
+#: leaving a capability reported as missing until restart.
+_FILTER_CACHE: set[str] | None = None
+
+
+def _ffmpeg_filters() -> set[str] | None:
+    """Filter names this ffmpeg exposes, or None if the probe itself failed.
+
+    None is not "no filters" -- it means we could not ask (ffmpeg absent, or the
+    probe timed out). Callers must distinguish the two: reporting a missing
+    binary as a missing library sends the user to the wrong fix.
+    """
+    global _FILTER_CACHE
+    if _FILTER_CACHE is not None:
+        return _FILTER_CACHE
     try:
         out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"],
                              capture_output=True, text=True, timeout=15).stdout
     except (OSError, subprocess.SubprocessError):
-        return False
-    return any(line.split()[1:2] == [name] for line in out.splitlines() if line.strip())
+        return None
+    names = set()
+    for line in out.splitlines():
+        parts = line.split()
+        # "  T.. scale  V->V  Scale the input video." -- name is the second field.
+        if len(parts) >= 2 and parts[0] not in ("Filters:", "="):
+            names.add(parts[1])
+    _FILTER_CACHE = names
+    return names
+
+
+def _ffmpeg_has_filter(name: str) -> bool | None:
+    """True/False if known, None if the build could not be probed."""
+    filters = _ffmpeg_filters()
+    return None if filters is None else name in filters
 
 
 def add_subtitles(input_file, output_file, subtitles_file, preserve_metadata=False):
@@ -346,7 +370,10 @@ def add_subtitles(input_file, output_file, subtitles_file, preserve_metadata=Fal
     the batteries-included one. Without the check the failure is a filter-parse
     error naming no cause, the same shape as the libwebp gap in `screenshot`.
     """
-    if not _ffmpeg_has_filter("subtitles"):
+    # `is False`, not falsy: None means the probe failed, and in that case we
+    # let ffmpeg report its own problem rather than blaming libass for what may
+    # be a missing binary entirely.
+    if _ffmpeg_has_filter("subtitles") is False:
         raise FfmpegError(
             "This ffmpeg has no 'subtitles' filter, so subtitles cannot be "
             "burned in -- it was built without libass. On macOS: "
