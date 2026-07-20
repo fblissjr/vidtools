@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.19.1
+
+### Fixed
+- **Animated images are refused instead of silently flattened.** `.gif` was routed to the video path for exactly this reason, but `.webp` and `.png` were not — so an animated WebP went through the image ops and kept only frame 1. A real 239-frame, 20 MB file came out as a single 52 KB still with no warning. The guard is keyed to format as well as `is_animated`, because MPO (iPhone HDR) also reports `is_animated` and its second frame is a gain map, not animation — taking frame 1 there is correct.
+- **Cartoon and anti-aliased vector art now classify as flat.** The classifier leaned on unique-colour count, which breaks on anti-aliased content: every edge generates intermediate shades, so frames from one animation measured 12k–26k colours and near-identical frames split between the two classes. Six of seven got the loose target and were compressed to **q25–q29**; all seven now land at **q81–q93** (10x–18x reduction, SSIM ~0.995).
+  - Classification now uses flat-run fraction plus **hard-edge density**. The second term is what separates cartoon and text (real edges) from a smooth gradient, which also has many flat runs but no edges and should stay continuous-tone.
+  - **The classes genuinely overlap on these features** — photographs measured 0.054–0.388 flat-run, upscaled renders ~0.53, cartoon and screenshots 0.104–0.923. The threshold is set to keep photographs and upscaled renders out, accepting that some flat content is still missed. That is the pre-existing failure, not a new one, but it is a failure: the real fix is a metric that sees edge ringing rather than a better guess at content type.
+
 ## 0.19.0
 
 ### Fixed

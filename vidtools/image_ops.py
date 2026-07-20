@@ -64,6 +64,11 @@ _FORMAT_MODES = {
     # TIFF stores essentially anything; omitted deliberately so it is unrestricted.
 }
 
+#: Container formats where extra frames really are animation. MPO and
+#: multi-page TIFF also report `is_animated`, but their extra frames are gain
+#: maps and pages -- taking the first is correct there.
+_ANIMATED_FORMATS = {"GIF", "WEBP", "PNG", "APNG"}
+
 #: Modes PIL's high-quality resampling filters cannot process. Resizing an
 #: I;16 scan raised "image has wrong mode" from LANCZOS, not from the encoder.
 _RESAMPLE_UNSUPPORTED = {"1", "I;16", "I;16B", "I;16L", "P"}
@@ -102,6 +107,23 @@ def _open_image(input_file: str) -> Image.Image:
     re-attach the source EXIF wholesale.
     """
     with Image.open(input_file) as handle:
+        if getattr(handle, "is_animated", False) and handle.format in _ANIMATED_FORMATS:
+            # Silently keeping frame 1 discarded the rest: a real 239-frame,
+            # 20 MB animated WebP came out as a single 52 KB still. `.gif` is
+            # already routed to the video path for this reason; `.webp` and
+            # `.png` are not, so guard here rather than by extension.
+            #
+            # Keyed to format as well as `is_animated`: MPO (iPhone HDR)
+            # reports is_animated=True, but its extra frame is a gain map, not
+            # animation, and taking frame 1 there is correct. Multi-page TIFF
+            # is likewise excluded.
+            raise ValueError(
+                f"'{os.path.basename(input_file)}' is animated "
+                f"({handle.n_frames} frames). The image ops would keep only the "
+                "first frame and silently discard the rest. Use the video verbs "
+                "(e.g. `vidtools convert`) on an animated file, or extract a "
+                "still first with `vidtools screenshot`."
+            )
         img = ImageOps.exif_transpose(handle)
         if img is None:  # pragma: no cover - only if the file has no EXIF path
             img = handle.copy()

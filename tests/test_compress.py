@@ -392,3 +392,43 @@ def test_photographic_content_keeps_the_requested_target(photo_png):
     report = recommend(photo_png, target_ssim=0.98)
     assert report.content_class == "photographic"
     assert 0.98 <= report.winner.ssim < 0.995 or report.winner.lossless
+
+
+def test_antialiased_vector_art_classifies_as_flat(tmp_path):
+    """Anti-aliased cartoon/SVG content is flat despite a large colour count.
+
+    Frames from one real animation measured 12k-26k unique colours because
+    every anti-aliased edge generates intermediate shades. A colour-count rule
+    split near-identical frames of the same clip between the two classes, and
+    the ones that landed on 'photographic' were compressed to q25-q29.
+    """
+    from PIL import ImageDraw
+    img = Image.new("RGB", (1400, 1400), "#f2efe6")
+    d = ImageDraw.Draw(img)
+    for i, colour in enumerate(("#c0392b", "#2980b9", "#27ae60", "#8e44ad")):
+        d.ellipse([120 + i * 60, 120 + i * 60, 800 + i * 110, 800 + i * 110],
+                  fill=colour, outline="black", width=10)
+    d.polygon([(700, 860), (1240, 1320), (220, 1320)], fill="#e67e22", outline="black")
+    # Anti-alias the way real renderers do: draw oversized, then downscale.
+    # Upscaling instead would smooth the flat interiors as well, destroying the
+    # very property being tested.
+    img = img.resize((350, 350), Image.Resampling.LANCZOS)
+
+    # The point is that classification does not depend on a small palette:
+    # this must comfortably clear the 256-colour shortcut, so a `flat` verdict
+    # has to come from the flat-run and hard-edge terms.
+    n_colours = len(np.unique(np.asarray(img.convert("RGB")).reshape(-1, 3), axis=0))
+    assert n_colours > 1024, f"fixture has only {n_colours} colours; palette shortcut would decide"
+    assert _classify_content(img) == "flat"
+
+
+def test_smooth_gradient_stays_photographic_despite_flat_runs(tmp_path):
+    """A gradient has many flat runs but no edges; it is continuous tone.
+
+    This is what the hard-edge term is for -- flat-run fraction alone would
+    call a gradient flat and apply a stricter target for no benefit.
+    """
+    y, x = np.mgrid[0:600, 0:600].astype(np.float64)
+    img = Image.fromarray(
+        np.dstack([x * 0.4, y * 0.4, (x + y) * 0.2]).clip(0, 255).astype(np.uint8))
+    assert _classify_content(img) == "photographic"

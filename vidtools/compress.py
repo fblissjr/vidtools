@@ -77,6 +77,16 @@ assert _AVIF_SPEED != 8, "speed=8 is pathological in Pillow's AVIF encoder"
 #: Default fidelity target. Eyeball-calibrated -- see module docstring.
 DEFAULT_TARGET_SSIM = 0.98
 
+#: Luma step counted as a "hard edge" when classifying content.
+_HARD_EDGE_STEP = 48
+#: Minimum flat-run fraction for flat content. Set above the ~0.53 measured on
+#: upscaled photographic renders so those stay photographic; see
+#: `_classify_content` for why the classes cannot be fully separated.
+_FLAT_RUN_MIN = 0.60
+#: Minimum hard-edge density, which excludes smooth gradients (measured 0.0000)
+#: while admitting cartoon art (0.006-0.018) and text (0.03-0.12).
+_HARD_EDGE_MIN = 0.002
+
 #: Minimum target applied to flat content (text, UI, line art).
 #:
 #: SSIM's scale is compressed on hard edges: on a real 1979x1307 terminal
@@ -188,33 +198,49 @@ def compute_ssim(a: Image.Image, b: Image.Image, band_rows: int = 512) -> float:
 # ---------------------------------------------------------------------------
 
 def _classify_content(img: Image.Image) -> str:
-    """Classify as 'flat' (screenshots, line art, UI) or 'photographic'.
+    """Classify as 'flat' (text, UI, line art, cartoon) or 'photographic'.
 
-    Flat content wants lossless or near-lossless -- lossy codecs put ringing on
-    hard edges and text, which SSIM under-penalises. Photographic content is
-    where lossy pays off enormously.
+    Flat content wants a stricter fidelity target: lossy codecs ring on hard
+    edges, and SSIM barely notices (see FLAT_TARGET_SSIM).
+
+    Two features, measured on a downscaled probe:
+
+    * **flat-run fraction** -- how often horizontally-adjacent pixels are
+      exactly equal. Synthetic content is full of uniform runs; photographs
+      essentially never are.
+    * **hard-edge density** -- how often adjacent pixels differ by a large step.
+      This is what separates cartoon and text (real edges) from a smooth
+      gradient, which also has many flat runs but no edges at all and should be
+      treated as continuous tone.
+
+    Colour count is deliberately *not* the main signal any more. It was, and it
+    failed on anti-aliased vector art: frames from one animation measured
+    12k-26k unique colours because every edge generates intermediate shades, so
+    near-identical frames classified inconsistently.
+
+    **The classes genuinely overlap on these features.** Measured ranges:
+    photographs 0.054-0.388 flat-run, upscaled renders ~0.53, cartoon and
+    screenshots 0.104-0.923. The threshold is therefore set to keep
+    photographs and upscaled renders *out* (they are the common case, and a
+    false 'flat' inflates their size for no benefit), accepting that some flat
+    content is missed and gets the looser target. That is the same failure this
+    code had before, not a new one -- but it is a failure, and the real fix is a
+    metric that sees edge ringing rather than a better guess at content type.
     """
     probe = img.copy()
     probe.thumbnail((512, 512), Image.Resampling.NEAREST)
     luma = _luma(probe)
-
-    # Fraction of horizontally-adjacent pixel pairs that are exactly equal.
-    # Synthetic graphics are full of flat runs; photographs essentially never are.
     if luma.shape[1] < 2:
         return "flat"
-    flat_fraction = float(np.mean(np.diff(luma, axis=1) == 0))
 
-    pixels = np.asarray(probe.convert("RGB")).reshape(-1, 3)
-    unique_colors = len(np.unique(pixels, axis=0))
+    steps = np.abs(np.diff(luma, axis=1))
+    flat_fraction = float(np.mean(steps == 0))
+    hard_edges = float(np.mean(steps >= _HARD_EDGE_STEP))
 
-    # A small palette is decisive on its own. Flat *runs* are not: upscaled and
-    # heavily-denoised photos are full of adjacent-equal pixels simply because
-    # smooth gradients quantize to the same 8-bit value -- a real upscaled
-    # render measured 69% adjacent-equal with 29k unique colours. Flat runs
-    # therefore only count as evidence when the palette is also small.
-    if unique_colors <= 256:
+    # A tiny palette is decisive on its own: nothing photographic has one.
+    if len(np.unique(np.asarray(probe.convert("RGB")).reshape(-1, 3), axis=0)) <= 256:
         return "flat"
-    if flat_fraction >= 0.5 and unique_colors <= 4096:
+    if flat_fraction >= _FLAT_RUN_MIN and hard_edges >= _HARD_EDGE_MIN:
         return "flat"
     return "photographic"
 
