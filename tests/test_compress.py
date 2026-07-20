@@ -4,20 +4,21 @@ These are shape/logic tests on synthetic PIL images -- cheap, no ffmpeg, no
 external encoders. Behavior that depends on what a real encoder does to a real
 photograph lives in tests/test_integration.py instead.
 """
+import io
+
 import numpy as np
 import pytest
 from PIL import Image
 
 from vidtools.compress import (
     Candidate,
+    _classify_content,
+    _pick_probe_crop,
     available_formats,
     compress_image,
     compute_ssim,
     recommend,
-    _classify_content,
-    _pick_probe_crop,
 )
-
 
 # --------------------------------------------------------------------------
 # fixtures / helpers
@@ -175,17 +176,52 @@ def test_recommend_ranks_by_size_and_meets_target(photo_png):
     assert report.winner is report.candidates[0]
 
 
-def test_recommend_lossless_only_returns_perfect_candidates(photo_png):
+def test_recommend_lossless_candidates_are_pixel_identical(photo_png):
+    """Decode each candidate and compare pixels, rather than trusting the field.
+
+    `Candidate.ssim` is hardcoded to 1.0 for lossless candidates -- it is never
+    measured -- so asserting on it checks a constant in the source. This would
+    keep passing if an encode silently became lossy; comparing decoded pixels
+    against the source will not.
+    """
     report = recommend(photo_png, lossless=True)
     assert report.candidates
     assert all(c.lossless for c in report.candidates)
-    assert all(c.ssim == pytest.approx(1.0, abs=1e-6) for c in report.candidates)
+
+    with Image.open(photo_png) as src:
+        expected = np.asarray(src.convert("RGB"))
+    for candidate in report.candidates:
+        assert candidate.data is not None
+        with Image.open(io.BytesIO(candidate.data)) as decoded:
+            actual = np.asarray(decoded.convert("RGB"))
+        assert np.array_equal(actual, expected), (
+            f"{candidate.fmt} claims lossless but decoded pixels differ from the source"
+        )
 
 
 def test_recommend_never_proposes_jpeg_for_alpha(alpha_png):
     report = recommend(alpha_png, target_ssim=0.9)
     assert report.has_alpha
     assert "jpeg" not in {c.fmt for c in report.candidates}
+
+
+def test_unsupported_output_extension_is_rejected(photo_png, tmp_path):
+    """An extension compress cannot encode must error, not get a second suffix.
+
+    `.bmp`/`.gif`/`.tif` are all in this project's own IMAGE_EXTS, so silently
+    writing `photo.bmp.jpg` was a plausible thing for a user to hit.
+    """
+    with pytest.raises(ValueError, match=r"Cannot compress to '\.bmp'"):
+        compress_image(photo_png, str(tmp_path / "photo.bmp"), target_ssim=0.9)
+
+
+def test_explicit_avif_extension_implies_opt_in(photo_png, tmp_path):
+    """Naming an .avif output is an explicit request; --allow-avif guards accidents."""
+    if "avif" not in available_formats():
+        pytest.skip("Pillow build has no AVIF support")
+    out = tmp_path / "explicit.avif"
+    report = compress_image(photo_png, str(out), target_ssim=0.9)
+    assert out.exists() and report.winner.fmt == "avif"
 
 
 def test_recommend_excludes_avif_by_default(photo_png):
@@ -275,3 +311,50 @@ def test_candidate_ratio_helper():
 def test_available_formats_includes_baseline():
     fmts = available_formats()
     assert {"png", "jpeg"} <= fmts
+
+
+def test_probe_crop_cannot_veto_an_achievable_target(tmp_path):
+    """A hard patch must not block an encode the whole image can reach.
+
+    `_pick_probe_crop` deliberately selects the busiest tile, so the probe
+    scores *lower* than the image as a whole. When the probe alone decided,
+    a small noisy region vetoed encodes that were comfortably achievable --
+    7 of 18 real photographs failed outright with "No candidate satisfied
+    the constraints".
+
+    This fixture is that shape: a smooth, highly-compressible field with one
+    small patch of incompressible noise.
+    """
+    # Larger than PROBE_SIZE, or _pick_probe_crop returns the whole image and
+    # the probe/whole distinction this test depends on does not exist.
+    rng = np.random.default_rng(11)
+    y, x = np.mgrid[0:1024, 0:1024].astype(np.float64)
+    arr = np.dstack([x * 0.2, y * 0.2, (x + y) * 0.1]).clip(0, 255).astype(np.uint8)
+    arr[400:700, 400:700] = rng.integers(0, 256, (300, 300, 3), dtype=np.uint8)
+    src = tmp_path / "mixed.png"
+    Image.fromarray(arr).save(src)
+
+    # The probe must genuinely be the hard region, or the test proves nothing.
+    from vidtools.compress import _encode, _pick_probe_crop, _score
+    with Image.open(src) as opened:
+        whole = opened.convert("RGB")
+    crop = _pick_probe_crop(whole)
+    probe_score = _score(crop, _encode(crop, "webp", 80, lossless=False))
+    whole_score = _score(whole, _encode(whole, "webp", 80, lossless=False))
+    assert probe_score < whole_score, (
+        f"fixture invalid: probe {probe_score:.4f} should be harder than "
+        f"the whole image {whole_score:.4f}"
+    )
+
+    report = recommend(str(src), target_ssim=0.98)
+    assert report.winner.ssim >= 0.98
+
+
+def test_unreachable_target_reports_what_was_achievable(tmp_path):
+    """Failure should name a target that would work, not just say no."""
+    rng = np.random.default_rng(5)
+    noise = rng.integers(0, 256, (256, 256, 3), dtype=np.uint8)
+    src = tmp_path / "noise.png"
+    Image.fromarray(noise).save(src)
+    with pytest.raises(ValueError, match=r"best achievable was SSIM 0\.\d+"):
+        recommend(str(src), target_ssim=0.9999)

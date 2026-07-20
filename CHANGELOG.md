@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.18.0
+
+### Fixed
+- **`compress` no longer rejects images it can actually compress.** Quality was chosen by binary-searching a 512px crop of the busiest region, and that result was final. But the busiest tile is the *hardest* part of the frame, so it scores below the image as a whole and vetoed encodes that were comfortably achievable. On a sample of 18 real photographs and renders, **7 failed outright** with "No candidate satisfied the constraints" — including one whose full-image SSIM reached 0.985 at a quality the search never tried.
+  - The full image is now authoritative; the probe crop only narrows the starting bracket and can no longer veto. All 18 now succeed.
+  - The probe also *over*-shot in the other direction. On the 6144x2560 test image the search now selects q78 rather than q86 for the same target — 0.32 MB instead of 0.47 MB, a 34x reduction rather than 23x. Correctness improved the output as well as the success rate.
+  - Cost: searching at full resolution is slower (~3s to ~10s on a 16 MP image). That is the price of the answer being right.
+- **Unsupported output extensions are rejected instead of double-suffixed.** `compress photo.png photo.bmp` wrote `photo.bmp.jpg`; `.bmp`, `.gif` and `.tif` are all in this project's own `IMAGE_EXTS`, so this was easy to hit. The error now lists the extensions that work.
+- **An explicit `.avif` output implies `--allow-avif`.** Naming the extension is an explicit request; the flag exists to stop AVIF being chosen *accidentally*. Previously this failed with an error that never mentioned AVIF.
+- **Unreachable targets say what was achievable**: "The best achievable was SSIM 0.9996; try --target-ssim 0.999" rather than a bare refusal.
+
+### Changed
+- AVIF encoder effort 6 -> 7, measured both smaller and faster at every quality tested. Pinned with a guard against 8, which inflates output 3.7-7x in Pillow's AVIF encoder specifically (avifenc does not do this).
+
+### Internal
+- Replaced a tautological lossless test that asserted `Candidate.ssim == 1.0` — a constant hardcoded in the source, never measured. It now decodes each candidate and compares pixels against the original, and was verified to fail against a deliberately-lossy encoder.
+
 ## 0.17.0
 
 ### Fixed

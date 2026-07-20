@@ -67,6 +67,13 @@ _Q_MAX = 95
 #: Side length of the native-resolution probe crop used for the quality search.
 PROBE_SIZE = 512
 
+#: AVIF encoder effort. 7 measured both smaller *and* faster than the more
+#: obvious 6 at every quality tested. Do not raise this to 8: Pillow's AVIF
+#: encoder specifically blows output up 3.7-7x at speed 8 (avifenc does not),
+#: so a "go a bit faster" edit would silently multiply file sizes.
+_AVIF_SPEED = 7
+assert _AVIF_SPEED != 8, "speed=8 is pathological in Pillow's AVIF encoder"
+
 #: Default fidelity target. Eyeball-calibrated -- see module docstring.
 DEFAULT_TARGET_SSIM = 0.98
 
@@ -247,7 +254,7 @@ def _encode(img: Image.Image, fmt: str, quality: int | None, lossless: bool) -> 
         else:
             save_kwargs.update(quality=quality, method=6)
     elif fmt == "avif":
-        save_kwargs.update(quality=quality, speed=6)
+        save_kwargs.update(quality=quality, speed=_AVIF_SPEED)
     elif fmt == "png":
         save_kwargs.update(optimize=True)
     else:  # pragma: no cover - guarded by caller
@@ -365,6 +372,39 @@ def _search_size(img: Image.Image, fmt: str, max_size: int) -> int | None:
     return best
 
 
+def _search_quality_full(img: Image.Image, fmt: str, target_ssim: float,
+                         lo: int = _Q_MIN, hi: int = _Q_MAX):
+    """Lowest quality in [lo, hi] whose FULL-RESOLUTION SSIM meets the target.
+
+    The full image is authoritative. The probe crop is only ever used to narrow
+    this bracket, never to decide -- it is the busiest tile in the frame, so it
+    scores lower than the image as a whole and will veto encodes that are
+    perfectly acceptable. On a sample of 18 real photos and renders, letting the
+    probe decide rejected 7 outright, including one whose full-image SSIM
+    reached 0.985 at a quality the probe never tried.
+
+    Returns `(result, best_seen)`. `result` is `(quality, data, score)` for the
+    smallest quality meeting the target, or None if even `hi` misses it.
+    `best_seen` is the highest SSIM observed either way, so an unreachable
+    target can be reported as a number the caller could actually ask for
+    instead of a bare refusal.
+    """
+    best = None
+    best_seen = None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        data = _encode(img, fmt, mid, lossless=False)
+        score = _score(img, data)
+        if best_seen is None or score > best_seen:
+            best_seen = score
+        if score >= target_ssim:
+            best = (mid, data, score)
+            hi = mid - 1
+        else:
+            lo = mid + 1
+    return best, best_seen
+
+
 def recommend(
     input_file: str,
     *,
@@ -405,6 +445,9 @@ def recommend(
                 lossy=lossy_fmts, lossless=lossless_fmts)
 
     candidates: list[Candidate] = []
+    #: Highest SSIM any format reached, including formats that missed the
+    #: target -- so a refusal can name a target that would have worked.
+    best_attempted: float | None = None
     total_steps = max(len(lossy_fmts) + len(lossless_fmts), 1)
     step = 0
 
@@ -416,22 +459,30 @@ def recommend(
         report_progress(int(step / total_steps * 100), f"probed {fmt} lossless")
 
     for fmt in lossy_fmts:
-        # Quality is searched on the probe crop (fast); the winning setting is
-        # then encoded at full resolution and re-scored, because crop SSIM only
-        # ranks settings -- it is not the number we report.
+        step += 1
         if max_size is not None:
             quality = _search_size(img, fmt, max_size)
+            if quality is None:
+                report_progress(int(step / total_steps * 100), f"{fmt}: no setting fits")
+                continue
+            data = _encode(img, fmt, quality, lossless=False)
+            score = _score(img, data)
         else:
-            quality = _search_quality(probe, fmt, target_ssim)
+            # The cheap probe narrows the bracket; the full image decides. A
+            # probe that finds nothing means "start low", not "give up".
+            hint = _search_quality(probe, fmt, target_ssim)
+            lo = max(_Q_MIN, hint - 8) if hint is not None else _Q_MIN
+            found, seen = _search_quality_full(img, fmt, target_ssim, lo=lo)
+            if seen is not None:
+                best_attempted = seen if best_attempted is None else max(best_attempted, seen)
+            if found is None:
+                report_progress(int(step / total_steps * 100),
+                                f"{fmt}: cannot reach SSIM {target_ssim}")
+                continue
+            quality, data, score = found
 
-        step += 1
-        if quality is None:
-            report_progress(int(step / total_steps * 100), f"{fmt}: no setting fits")
-            continue
-
-        data = _encode(img, fmt, quality, lossless=False)
         candidates.append(Candidate(fmt=fmt, quality=quality, lossless=False,
-                                    size=len(data), ssim=_score(img, data), data=data))
+                                    size=len(data), ssim=score, data=data))
         report_progress(int(step / total_steps * 100), f"probed {fmt} q{quality}")
 
     # Enforce constraints on the *full-resolution* measurements, not the probe.
@@ -443,11 +494,16 @@ def recommend(
         viable = [c for c in candidates if c.ssim >= target_ssim]
 
     if not viable:
-        raise ValueError(
-            "No candidate satisfied the constraints "
-            f"({'max_size=' + str(max_size) if max_size else 'target_ssim=' + str(target_ssim)}). "
-            "Loosen the target, or allow more formats."
-        )
+        if max_size is not None:
+            detail = f"max_size={max_size}"
+            advice = "Raise the budget, or allow more formats."
+        else:
+            detail = f"target_ssim={target_ssim}"
+            advice = (f"The best achievable was SSIM {best_attempted:.4f}; try "
+                      f"--target-ssim {best_attempted - 0.001:.3f}."
+                      if best_attempted is not None
+                      else "Try a lower --target-ssim, or allow more formats.")
+        raise ValueError(f"No candidate satisfied the constraints ({detail}). {advice}")
 
     viable.sort(key=lambda c: c.size)
     # Size-budget mode maximises fidelity within the budget; the other modes
@@ -485,10 +541,25 @@ def compress_image(
     winning format supplies one.
     """
     forced: list[str] | None = None
+    append_extension = output_file is None
     if output_file:
         ext = os.path.splitext(output_file)[1].lstrip(".").lower()
         if ext in _FMT_FOR_EXT:
             forced = [_FMT_FOR_EXT[ext]]
+            # Naming an .avif output *is* the opt-in. The flag exists to stop
+            # AVIF being chosen accidentally, not to second-guess an explicit
+            # request -- and refusing here produced an error that never
+            # mentioned AVIF.
+            if forced == ["avif"]:
+                allow_avif = True
+        elif ext:
+            raise ValueError(
+                f"Cannot compress to '.{ext}'. Supported output extensions: "
+                f"{', '.join('.' + e for e in sorted(_FMT_FOR_EXT))}. "
+                "Omit the extension to let the winning format choose one."
+            )
+        else:
+            append_extension = True
 
     report = recommend(input_file, target_ssim=target_ssim, lossless=lossless,
                        max_size=max_size, allow_avif=allow_avif, formats=forced)
@@ -496,7 +567,7 @@ def compress_image(
     if output_file is None:
         base = os.path.splitext(input_file)[0]
         output_file = f"{base}_compressed.{report.winner.extension}"
-    elif forced is None:
+    elif append_extension:
         output_file = f"{output_file}.{report.winner.extension}"
 
     if dry_run:
