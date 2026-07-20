@@ -219,7 +219,11 @@ The `dl-live` CLI command records YouTube/HLS live broadcasts via `vidtools.ytdl
 1. Passing `--hls-use-mpegts` OR `-o foo.ts` makes yt-dlp 2026.x invoke ffmpeg with the entire signed HLS master playlist URL as a single `-i` argument. YouTube's signed URLs run ~2 KB and overflow macOS `ARG_MAX` (256 KB), aborting with `OSError: Errno 63 File name too long`. Both triggers must be avoided.
 2. yt-dlp's default HLS path writes MPEG-TS data into a `.mp4` file during recording (FixupM3u8 converts to proper mp4 at clean exit), so the partial-file-is-playable property is preserved without forcing `.ts`.
 
-**Known issue (2026-05-16):** when `vidtools.ytdlp.download_live()` invokes yt-dlp via `subprocess.Popen` from Python, yt-dlp's internal ffmpeg invocation still hits the `Errno 63` bug for HLS streams (e.g., YouTube's format 95) — even with `%(ext)s` template output and `--remux-video mp4`. Direct shell invocation of the *same* `yt-dlp` binary with the *same* flags works. The Popen call site has no `shell=True`, no env overrides, no encoding tricks; the trigger has not been isolated. **Workaround**: for live recordings on macOS, invoke `yt-dlp` directly from the shell using the command profile in `vidtools/ytdlp.py:build_ytdlp_live_command`. Reproduces against DASH-served streams too once the format selector lands on HLS. Tracking: investigate yt-dlp source for the offending join, possibly file upstream.
+**Known issue (open).** Recording an HLS stream through `download_live()` aborts with `OSError: Errno 63 File name too long`.
+
+The long-standing diagnosis — *"the same flags work from a shell, so Popen is the trigger"* — was wrong, and the wrongness is why it stalled: Popen has no `shell=True` and no env overrides, so there was nowhere to look. Diffing the two commands on 2026-07-20 showed they were never the same. The library adds `--print after_move:filepath` and passes a literal `-o show.mp4` where the shell form used an `-o show.%(ext)s` template. Either is a likelier trigger than the spawn mechanism.
+
+Full analysis, the isolation procedure, and the standalone script live in `internal/scripts/README.md`. **Unverified** — reproducing needs a real live broadcast. `dl-live` is undocumented in the public README while this is open.
 
 ## FFmpeg practices
 
