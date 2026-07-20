@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.15.0
+
+### Added
+- **`compress`** — a new image verb that picks the format *and* quality by measuring, not by heuristic. It encodes candidates, scores each against the original with SSIM, and writes the smallest one that meets a fidelity target (`--target-ssim`, default 0.98). Also supports `--lossless` (exact encodes only) and `--max-size 500k` (maximise fidelity within a byte budget). `--dry-run` reports the ranked candidates without writing.
+  - Distinct from `optimize`, which recompresses into the format named by the output extension. `compress` chooses the format; give it an output path without an extension (or none at all) and the winner supplies one.
+  - **Defaults to PNG/JPEG/WebP, excluding AVIF.** AVIF compressed ~2x better than WebP in testing, but no major vision API decodes it — the Claude API accepts JPEG/PNG/GIF/WebP and Gemini accepts PNG/JPEG/WebP/HEIC/HEIF, and neither converts client-side. Defaulting to AVIF would emit files those tools cannot read at all. `--allow-avif` opts in for storage or browser targets.
+  - Quality is searched on a native-resolution crop of the highest-variance region, not a downscaled proxy: downscaling averages away the blocking and ringing the search exists to detect, and a flat-region crop would over-recommend aggressive quality.
+  - Pillow-only (no `cwebp`/`avifenc`/`oxipng` subprocesses); a build without AVIF or WebP degrades to the formats it has rather than failing.
+  - Caveat, stated in the module docstring: SSIM is a mediocre perceptual metric, chosen because it is computable with numpy alone and is monotonic in encode quality. The default target is eyeball-calibrated, not perceptually principled.
+
+### Fixed
+- Content classification no longer misreads smooth or upscaled images as flat art. Flat *runs* alone were treated as evidence of synthetic content, but upscaled photos are full of adjacent-equal pixels simply because smooth gradients quantize to the same 8-bit value — a real 6144x2560 upscaled render measured 69% adjacent-equal with ~29k unique colours. Flat runs now only count when the palette is also small. The misclassification made the search spend ~35s on full-resolution lossless encodes that never win; the same image now completes in ~3s with an identical result.
+
 ## 0.14.1
 
 ### Fixed

@@ -6,6 +6,7 @@ from .utils import (
     is_valid_file, check_ffmpeg_installed, VIDEO_EXTS, AUDIO_EXTS, IMAGE_EXTS,
 )
 from . import operations
+from .compress import DEFAULT_TARGET_SSIM, compress_image
 from . import image_ops
 from . import audio_ops
 from . import presets
@@ -83,6 +84,23 @@ def _add_io(parser, input_help="Input file", output_help="Output file"):
     """Add the standard `input` + `output` positionals."""
     parser.add_argument("input", type=lambda x: is_valid_file(parser, x), help=input_help)
     parser.add_argument("output", help=output_help)
+
+
+def _parse_size(value: str) -> int:
+    """Parse a byte budget like '500k', '2M', or a bare '512000'."""
+    text = value.strip().lower().rstrip("b")
+    multipliers = {"k": 1024, "m": 1024**2, "g": 1024**3}
+    multiplier = multipliers.get(text[-1:], 1)
+    if multiplier != 1:
+        text = text[:-1]
+    try:
+        size = int(float(text) * multiplier)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Invalid size: '{value}'. Use e.g. 500k, 2M, 512000") from None
+    if size <= 0:
+        raise argparse.ArgumentTypeError(f"Size must be positive, got '{value}'")
+    return size
 
 
 def _add_time_range(parser):
@@ -668,6 +686,53 @@ Examples:
         image_ops.optimize_image(args.input, args.output, quality=args.quality,
                                  max_width=args.max_width, max_height=args.max_height)
     optimize.set_defaults(func=_optimize)
+
+    # ---------------------------------------------------------------- compress
+    compress_p = subparsers.add_parser(
+        "compress",
+        help="Shrink an image, picking the format automatically",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description="""Measure candidate encodings and write the smallest one that
+meets a fidelity target.
+
+Unlike `optimize` (which recompresses into the format you name), `compress`
+searches formats and qualities, scores each against the original, and reports
+what it found. Defaults to PNG/JPEG/WebP -- the formats the Claude and Gemini
+vision APIs accept. AVIF usually compresses far better but no major vision API
+decodes it, so it is opt-in via --allow-avif.""",
+    )
+    compress_p.add_argument("input", type=lambda x: is_valid_file(compress_p, x), help="Input image")
+    compress_p.add_argument("output", nargs="?",
+                          help="Output path. Omit the extension to let the winning format "
+                               "supply one; omit entirely for <input>_compressed.<ext>")
+    compress_p.add_argument("--target-ssim", type=float, default=DEFAULT_TARGET_SSIM,
+                          help=f"Fidelity target 0-1 (default: {DEFAULT_TARGET_SSIM})")
+    compress_p.add_argument("--lossless", action="store_true",
+                          help="Only exact encodes (SSIM 1.0); smallest wins")
+    compress_p.add_argument("--max-size", type=_parse_size,
+                          help="Byte budget (e.g. 500k, 2M). Maximises fidelity within it")
+    compress_p.add_argument("--allow-avif", action="store_true",
+                          help="Allow AVIF. Compresses best, but Claude/Gemini cannot read it")
+    compress_p.add_argument("--dry-run", action="store_true",
+                          help="Report the ranked candidates without writing a file")
+
+    def _compress(args):
+        report = compress_image(
+            args.input, args.output,
+            target_ssim=args.target_ssim, lossless=args.lossless,
+            max_size=args.max_size, allow_avif=args.allow_avif, dry_run=args.dry_run,
+        )
+        src_mb = report.source_size / 1048576
+        print(f"{report.width}x{report.height} {report.content_class}, {src_mb:.2f} MB")
+        for cand in report.candidates:
+            marker = "->" if cand is report.winner else "  "
+            print(f" {marker} {cand.label():18} {cand.size / 1048576:7.2f} MB"
+                  f"  {cand.ratio(report.source_size):5.1f}x smaller  SSIM {cand.ssim:.6f}")
+        if report.output_path:
+            print(f"wrote {report.output_path}")
+        elif args.dry_run:
+            print("(dry run -- nothing written)")
+    compress_p.set_defaults(func=_compress)
 
     # ---------------------------------------------------------------- adjust
     adjust = subparsers.add_parser("adjust", help="Adjust image brightness/contrast/rotation/flip",

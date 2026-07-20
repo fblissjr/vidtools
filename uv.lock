@@ -478,34 +478,34 @@ wheels = [
 
 [package.optional-dependencies]
 cudart = [
-    { name = "nvidia-cuda-runtime", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-runtime" },
 ]
 cufft = [
-    { name = "nvidia-cufft", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cufft" },
 ]
 cufile = [
-    { name = "nvidia-cufile", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cufile" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-cupti" },
 ]
 curand = [
-    { name = "nvidia-curand", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-curand" },
 ]
 cusolver = [
-    { name = "nvidia-cusolver", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cusolver" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cusparse" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-nvjitlink" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-nvrtc" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-nvtx" },
 ]
 
 [[package]]
@@ -1303,7 +1303,7 @@ wheels = [
 
 [[package]]
 name = "onnx-weekly"
-version = "1.22.0.dev20260515"
+version = "1.23.0.dev20260720"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ml-dtypes" },
@@ -1311,10 +1311,20 @@ dependencies = [
     { name = "protobuf" },
     { name = "typing-extensions" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/a5/f8/068934c1b49d5d1bc133ba586ba244e70b76839db3422a9c5c878078a9ba/onnx_weekly-1.23.0.dev20260720.tar.gz", hash = "sha256:b9e2e0447db3a400b182beedd3619a41b272a04b41e1a1173bfc491369adcaab", size = 12247280, upload-time = "2026-07-20T00:55:33.689Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cf/c6/86e60e5493b5cf073d0891e1d2fc3754e85fdddc6ffd51da64cc5d3e77fb/onnx_weekly-1.22.0.dev20260515-cp312-abi3-macosx_12_0_universal2.whl", hash = "sha256:e531e650b9d0c870a5adead027a0175515f626b46e2621c4d814541f05aecd1d", size = 19659409, upload-time = "2026-05-15T11:54:46.417Z" },
-    { url = "https://files.pythonhosted.org/packages/0b/aa/a251ac1d1e3e5b206afcf5adc23a1f3f87d5fbde2f5bf92e1f2da7b6ee98/onnx_weekly-1.22.0.dev20260515-cp312-abi3-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3c0146d27e6f54e203357c9051a627e58ec6b293825cc796f2fb857736574891", size = 18515127, upload-time = "2026-05-15T11:54:50.179Z" },
-    { url = "https://files.pythonhosted.org/packages/91/68/b8a6c396f27850addbfe7a70a91f8028afc5d63b944231be468f123ec91b/onnx_weekly-1.22.0.dev20260515-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e9ffd3ce4badaa3d587557db59661aef700f9c4a7d808eef13cedc3353029bce", size = 18734198, upload-time = "2026-05-15T11:54:54.252Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/94/8325140cd1e7075ac3944d9c0903f68d70a372197719a43d39097e5ce746/onnx_weekly-1.23.0.dev20260720-cp312-abi3-macosx_13_0_universal2.whl", hash = "sha256:b02e51424260497951cd51e454f135f8016f554f7e27ac9a1a9a341e720823b9", size = 20364733, upload-time = "2026-07-20T00:54:50.702Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/97/50a7f88b6351934e2ada17fbae377870c327c038c5f3ae7b1b534ea36b37/onnx_weekly-1.23.0.dev20260720-cp312-abi3-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:18090ff202b3a32a1b6f0ba7405ffb3111c88de5c89208f24bb98cf2499475bf", size = 19223978, upload-time = "2026-07-20T00:54:54.21Z" },
+    { url = "https://files.pythonhosted.org/packages/04/82/63ba594ebf681930b0ccb7ec499a536feb6e9c5f32ab9d901355ab978801/onnx_weekly-1.23.0.dev20260720-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:14906254c11045e0ee741769c3e8f45e8ca51d89973c40f86b9725227cd7b4b0", size = 19459119, upload-time = "2026-07-20T00:54:57.769Z" },
+    { url = "https://files.pythonhosted.org/packages/72/3a/530c5deb6f1d191d4ce29983d554698bb9bca85bce25a085525744f94e43/onnx_weekly-1.23.0.dev20260720-cp312-abi3-pyemscripten_2026_0_wasm32.whl", hash = "sha256:43d0ea9657770ae1329ed744e07990fe98c0b951538244a18a8d9251080775a3", size = 17162961, upload-time = "2026-07-20T00:55:01.349Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/0c/368a0292e2c6a572805e59ad6fe16a279a1172cfeb0161bd370f6aeb38ab/onnx_weekly-1.23.0.dev20260720-cp312-abi3-win32.whl", hash = "sha256:3aa1b48f318448321c04689f8b0fed5f08ee725f44fe2799d97d3c31739d10fe", size = 18348684, upload-time = "2026-07-20T00:55:05.017Z" },
+    { url = "https://files.pythonhosted.org/packages/05/81/438113c469c76ac54355623680a9f5bb23018e6eef9132623460266e2b1d/onnx_weekly-1.23.0.dev20260720-cp312-abi3-win_amd64.whl", hash = "sha256:ce6a9976776ae9642a78106268860904ed236f9f661e24d91556d7ae3d01da85", size = 18481337, upload-time = "2026-07-20T00:55:08.61Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/50/509fbfb49e20ac22f8e83e6bb337b3812e772973df7e2547d7e33d6699a6/onnx_weekly-1.23.0.dev20260720-cp312-abi3-win_arm64.whl", hash = "sha256:d5f6ad161721414f18a8f6e8b314a5fc1155e27a86b05fd398b3a69948d2de3f", size = 18646112, upload-time = "2026-07-20T00:55:12.111Z" },
+    { url = "https://files.pythonhosted.org/packages/25/e0/88868ce58c4847722e614d8f0fad63c42b2c7deed5587b9dfe761a0a9e35/onnx_weekly-1.23.0.dev20260720-cp314-cp314t-macosx_13_0_universal2.whl", hash = "sha256:669b65a89d46e8a524a4e8955c3dbd71a492e3cfe72ce617f948ef804003f64b", size = 20370382, upload-time = "2026-07-20T00:55:16.161Z" },
+    { url = "https://files.pythonhosted.org/packages/87/93/59941944d40ddb88818553a4e15e2a789a9c3323033d9bd2b83b85f55e48/onnx_weekly-1.23.0.dev20260720-cp314-cp314t-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:4203ef8bfbb4dd1e690f403874b5bcebf912c228fff3df4b591b195e240beab8", size = 19228292, upload-time = "2026-07-20T00:55:19.709Z" },
+    { url = "https://files.pythonhosted.org/packages/74/08/06f348d35823e42fd97820bf090dd6bb1116aae2295da8addd5efa67bea4/onnx_weekly-1.23.0.dev20260720-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f0fe57cdcc2e2368ebe02d06bad5720cf00ba1ad089ad1b2b3619a65c710dd23", size = 19462408, upload-time = "2026-07-20T00:55:23.084Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/86/af16ee678e9dc07447dc57800c17065dcac1b622c309328c1187f762e054/onnx_weekly-1.23.0.dev20260720-cp314-cp314t-win_amd64.whl", hash = "sha256:7807adeef44b67bc10abb2c95c8b131b5a804a3a6fc68ed50331b76bbe9481da", size = 18509053, upload-time = "2026-07-20T00:55:26.967Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/af/89467096ff71a880690765567b6851af0e551d922f50540c025140ba10f4/onnx_weekly-1.23.0.dev20260720-cp314-cp314t-win_arm64.whl", hash = "sha256:39d89f2be0fff7346db66d7648e2a0db998a79413461fa52023a9c7ed9868b28", size = 18678903, upload-time = "2026-07-20T00:55:30.613Z" },
 ]
 
 [[package]]
@@ -2031,8 +2041,8 @@ name = "standard-aifc"
 version = "3.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
-    { name = "standard-chunk", marker = "python_full_version >= '3.13'" },
+    { name = "audioop-lts" },
+    { name = "standard-chunk" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c4/53/6050dc3dde1671eb3db592c13b55a8005e5040131f7509cef0215212cb84/standard_aifc-3.13.0.tar.gz", hash = "sha256:64e249c7cb4b3daf2fdba4e95721f811bde8bdfc43ad9f936589b7bb2fae2e43", size = 15240, upload-time = "2024-10-30T16:01:31.772Z" }
 wheels = [
@@ -2053,7 +2063,7 @@ name = "standard-sunau"
 version = "3.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
+    { name = "audioop-lts" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/66/e3/ce8d38cb2d70e05ffeddc28bb09bad77cfef979eb0a299c9117f7ed4e6a9/standard_sunau-3.13.0.tar.gz", hash = "sha256:b319a1ac95a09a2378a8442f403c66f4fd4b36616d6df6ae82b8e536ee790908", size = 9368, upload-time = "2024-10-30T16:01:41.626Z" }
 wheels = [
@@ -2296,7 +2306,7 @@ wheels = [
 
 [[package]]
 name = "vidtools"
-version = "0.14.1"
+version = "0.15.0"
 source = { editable = "." }
 dependencies = [
     { name = "bcrypt" },

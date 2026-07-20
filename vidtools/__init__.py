@@ -37,6 +37,15 @@ from .image_ops import (
     get_image_info,
 )
 
+from .compress import (
+    Candidate,
+    CompressionReport,
+    available_formats,
+    compress_image,
+    compute_ssim,
+    recommend,
+)
+
 from .audio_ops import (
     convert_audio,
     cut_audio,
@@ -70,6 +79,9 @@ __all__ = [
     # Image
     "resize_image", "convert_image", "crop_image", "create_thumbnail",
     "strip_image_metadata", "optimize_image", "adjust_image", "get_image_info",
+    # compression search
+    "compress_image", "recommend", "compute_ssim", "available_formats",
+    "Candidate", "CompressionReport",
     # Audio
     "convert_audio", "cut_audio", "normalize_audio", "mix_audio",
     "get_audio_info", "fade_audio", "resample_audio",
