@@ -341,15 +341,18 @@ def _ffmpeg_has_filter(name: str) -> bool:
 def add_subtitles(input_file, output_file, subtitles_file, preserve_metadata=False):
     """Burn subtitles into the video.
 
-    Requires an ffmpeg built with libass. Homebrew's default formula ships
-    without it, and the failure is otherwise a filter-parse error that names no
-    cause -- the same shape as the libwebp gap that hid in `screenshot`.
+    Requires an ffmpeg built with libass. Homebrew's `ffmpeg` formula was
+    slimmed to ten dependencies and no longer includes it -- `ffmpeg-full` is
+    the batteries-included one. Without the check the failure is a filter-parse
+    error naming no cause, the same shape as the libwebp gap in `screenshot`.
     """
     if not _ffmpeg_has_filter("subtitles"):
         raise FfmpegError(
             "This ffmpeg has no 'subtitles' filter, so subtitles cannot be "
-            "burned in. It needs to be built with libass "
-            "(e.g. 'brew install ffmpeg --with-libass', or a full build)."
+            "burned in -- it was built without libass. On macOS: "
+            "'brew install ffmpeg-full' (the plain 'ffmpeg' formula omits it). "
+            "Alternatively keep subtitles as a separate track instead of "
+            "burning them in, which needs no extra libraries."
         )
     escaped = _escape_subtitle_path(subtitles_file)
     command = ["ffmpeg", "-y", "-i", input_file, "-vf", f"subtitles='{escaped}'"]

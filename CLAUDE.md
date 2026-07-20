@@ -11,6 +11,21 @@ the only surface; a macOS Quick Action wrapper is planned as the second one.
 
 Python >=3.12. Requires `ffmpeg` >= 5.1 and `yt-dlp` in PATH.
 
+**Homebrew's `ffmpeg` formula is slim** — ten dependencies, no libass, libwebp,
+libaom-av1 or libvorbis. `ffmpeg-full` is the batteries-included one. Consequences
+in this codebase, all verified against a slim build:
+
+- `subtitles` burn-in needs libass and is unavailable; `add_subtitles` checks for
+  the filter and says so rather than emitting a filter-parse error naming no cause.
+- The `av1_quality` preset needs libaom-av1, and `.ogg` output needs libvorbis.
+  Neither is capability-checked yet — they fail with a raw ffmpeg error.
+- libwebp is already routed around: `screenshot` and `compress` encode WebP
+  through PIL, so they work regardless.
+
+Every filter the tool uses (scale, transpose, crop, afade, loudnorm,
+silencedetect, afftdn, acompressor, highpass, aresample) is present in the slim
+build. Only encoders and libass are affected.
+
 ## Conventions (READ FIRST)
 
 - **uv only**. Never `pip`/`python -m pip`/bare `python`. Run scripts with `uv run`, install with `uv add`, sync with `uv sync`.
