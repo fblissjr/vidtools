@@ -50,9 +50,43 @@ _NO_ALPHA_EXTS = _JPEG_EXTS
 #: a silent bug: quality=1 and quality=100 produced byte-identical files.
 _QUALITY_EXTS = (*_JPEG_EXTS, ".webp", ".avif")
 
+#: Colour modes each container can actually store. A mode outside this set is
+#: converted before saving rather than raising `OSError: cannot write mode
+#: CMYK as PNG` -- which is what a scanned CMYK TIFF used to do.
+_FORMAT_MODES = {
+    ".png": {"1", "L", "LA", "I", "I;16", "P", "RGB", "RGBA"},
+    ".jpg": {"L", "RGB", "CMYK"},
+    ".jpeg": {"L", "RGB", "CMYK"},
+    ".webp": {"RGB", "RGBA"},
+    ".avif": {"RGB", "RGBA"},
+    ".bmp": {"1", "L", "P", "RGB"},
+    ".gif": {"L", "P"},
+    # TIFF stores essentially anything; omitted deliberately so it is unrestricted.
+}
+
+#: Modes PIL's high-quality resampling filters cannot process. Resizing an
+#: I;16 scan raised "image has wrong mode" from LANCZOS, not from the encoder.
+_RESAMPLE_UNSUPPORTED = {"1", "I;16", "I;16B", "I;16L", "P"}
+
 
 def _ext(path: str) -> str:
     return os.path.splitext(path)[1].lower()
+
+
+def _prepare_for_resample(img: Image.Image) -> Image.Image:
+    """Return an image the high-quality resampling filters can actually handle.
+
+    LANCZOS rejects bilevel and 16-bit modes outright, and resampling a palette
+    image interpolates palette *indices* rather than colours, which produces
+    arbitrary hues. Promote to a continuous-tone mode first.
+    """
+    if img.mode not in _RESAMPLE_UNSUPPORTED:
+        return img
+    if img.mode == "P":
+        return img.convert("RGBA" if "transparency" in img.info else "RGB")
+    if img.mode == "1":
+        return img.convert("L")
+    return img.convert("I")  # 16-bit integer modes
 
 
 def _open_image(input_file: str) -> Image.Image:
@@ -108,7 +142,23 @@ def _save_image(img: Image.Image, output_file: str, quality: int | None = None,
     ext = _ext(output_file)
     save_kwargs: dict[str, Any] = dict(extra)
 
-    if ext in _NO_ALPHA_EXTS and img.mode not in ("RGB", "L"):
+    supported = _FORMAT_MODES.get(ext)
+    if supported is not None and img.mode not in supported:
+        # Pick the closest representable mode rather than failing: keep alpha
+        # if the target can store it, keep greyscale if the source was grey.
+        if "RGBA" in supported and (img.mode in ("RGBA", "LA", "PA")
+                                    or "transparency" in img.info):
+            img = img.convert("RGBA")
+        elif img.mode in ("I", "I;16", "I;16B", "I;16L", "F") and "L" in supported:
+            img = img.convert("I").point(lambda v: v * (1 / 257)).convert("L")
+        elif "RGB" in supported:
+            img = img.convert("RGB")
+        elif "L" in supported:
+            img = img.convert("L")
+        elif "P" in supported:
+            img = img.convert("P", palette=Image.Palette.ADAPTIVE)
+
+    if ext in _NO_ALPHA_EXTS and img.mode not in ("RGB", "L", "CMYK"):
         # Flatten onto white rather than converting straight to RGB: a bare
         # convert composites transparent pixels onto black.
         if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
@@ -156,18 +206,20 @@ def resize_image(input_file: str, output_file: str, percentage: float | None = N
 
     img = _open_image(input_file)
     if percentage:
-        new_w = int(img.width * percentage)
-        new_h = int(img.height * percentage)
+        # Clamp to 1px: scaling a very small image down rounds to zero, and PIL
+        # rejects a zero dimension. Found on a real 1x1 image at 25%.
+        new_w = max(1, int(img.width * percentage))
+        new_h = max(1, int(img.height * percentage))
     elif width:
         new_w = width
-        new_h = int(img.height * (width / img.width))
+        new_h = max(1, int(img.height * (width / img.width)))
     elif height:
         new_h = height
-        new_w = int(img.width * (height / img.height))
+        new_w = max(1, int(img.width * (height / img.height)))
     else:
         raise ValueError("You must specify a percentage, width, or height.")
 
-    result = img.resize((new_w, new_h), resampling)
+    result = _prepare_for_resample(img).resize((new_w, new_h), resampling)
     result.info = img.info
     _save_image(result, output_file, preserve_metadata=preserve_metadata)
 
@@ -208,7 +260,7 @@ def crop_image(input_file: str, output_file: str, width: int, height: int,
 def create_thumbnail(input_file: str, output_file: str, size: int = 256,
                      preserve_metadata: bool = False):
     """Create an aspect-preserving thumbnail. Never upscales."""
-    img = _open_image(input_file)
+    img = _prepare_for_resample(_open_image(input_file))
     img.thumbnail((size, size), Image.Resampling.LANCZOS)
     _save_image(img, output_file, preserve_metadata=preserve_metadata)
 
@@ -216,7 +268,7 @@ def create_thumbnail(input_file: str, output_file: str, size: int = 256,
 
 
 def strip_image_metadata(input_file: str, output_file: str):
-    """Remove metadata from an image without altering a single pixel.
+    """Remove annotations from an image without altering a single pixel.
 
     The previous implementation built `Image.new(img.mode, img.size)` and pasted
     into it. For a palette image that allocates a *default* palette, and pasting
@@ -224,16 +276,32 @@ def strip_image_metadata(input_file: str, output_file: str):
     output was the source's indices read against an unrelated colour table, and
     a four-colour PNG came out solid black.
 
-    Copying the image and clearing its info dict keeps the palette attached.
+    The ICC profile is deliberately kept. Dropping it would change how the image
+    renders, which is a pixel-level change in everything but name; this op
+    removes EXIF/IPTC/XMP annotations, not colour semantics.
     """
     img = _open_image(input_file)
+    ext = _ext(output_file)
+    supported = _FORMAT_MODES.get(ext)
+    if supported is not None and img.mode not in supported:
+        raise ValueError(
+            f"Cannot write a {img.mode} image as '{ext}' without converting its "
+            f"colour mode, and strip-metadata must not alter pixels. Use a "
+            f"container that supports {img.mode} (e.g. .tiff), or convert "
+            f"explicitly with `vidtools convert` first."
+        )
+
     clean = img.copy()
+    profile = img.info.get("icc_profile")
     clean.info = {}
     if img.mode == "P":
         palette = img.getpalette()
         if palette:
             clean.putpalette(palette)
-    clean.save(output_file)
+        if "transparency" in img.info:
+            clean.info["transparency"] = img.info["transparency"]
+    save_kwargs = {"icc_profile": profile} if profile else {}
+    clean.save(output_file, **save_kwargs)
 
     logger.info("Image metadata stripped", output=output_file)
 
@@ -242,7 +310,7 @@ def optimize_image(input_file: str, output_file: str, quality: int = 80,
                    max_width: int | None = None, max_height: int | None = None,
                    preserve_metadata: bool = False):
     """Resize-to-fit and compress an image. Never upscales."""
-    img = _open_image(input_file)
+    img = _prepare_for_resample(_open_image(input_file))
     if max_width or max_height:
         img.thumbnail((max_width or img.width, max_height or img.height),
                       Image.Resampling.LANCZOS)

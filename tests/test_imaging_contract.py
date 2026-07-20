@@ -224,3 +224,21 @@ def test_provenance_is_preserved_on_request(private_jpeg, tmp_path):
             "preserve_metadata must not re-admit GPS -- provenance and location "
             "are different categories"
         )
+
+
+# ---------------------------------------------------------------------------
+# 8. Degenerate sizes -- found on real files, not imagined
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("dims", [(1, 1), (1, 400), (3, 2)])
+def test_percentage_resize_never_produces_a_zero_dimension(tmp_path, dims):
+    """Scaling a tiny image rounds to zero, and PIL rejects a zero dimension.
+
+    A real 1x1 image in the wild hit this at --percentage 0.25.
+    """
+    src = tmp_path / "tiny.png"
+    Image.new("RGB", dims, (10, 20, 30)).save(src)
+    out = str(tmp_path / "out.png")
+    image_ops.resize_image(str(src), out, percentage=0.25)
+    with Image.open(out) as result:
+        assert result.width >= 1 and result.height >= 1

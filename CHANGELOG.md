@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.18.1
+
+### Fixed
+Found by broadening validation beyond RGB PNG/JPEG — a synthetic colour-mode/format matrix plus a stratified sample of real local images.
+
+- **CMYK images no longer fail on PNG/WebP output.** `_save_image` handled alpha incompatibility but not colour-space incompatibility, so a CMYK scan raised `OSError: cannot write mode CMYK as PNG`. Each container now declares the modes it can store, and unsupported modes are converted to the nearest representable one.
+- **16-bit and bilevel images no longer fail to resize.** LANCZOS rejects `I;16` and `1` outright — `thumbnail` raised `ValueError: image has wrong mode` from the resampling step, not the encoder. Such modes are promoted to a continuous-tone mode before resampling. Palette images are promoted too: resampling P-mode interpolates palette *indices* rather than colours, producing arbitrary hues.
+- **`resize --percentage` never produces a zero dimension.** Scaling a very small image rounds to zero and PIL rejects it; a real 1x1 image failed at 25%.
+- **`strip-metadata` refuses mode-lossy targets with a clear message** instead of a raw `OSError`. Converting CMYK to RGB to satisfy a `.png` target would alter pixels, which is precisely what this op must not do.
+- **`strip-metadata` now keeps the ICC profile.** Dropping it changes how the image renders — a pixel-level change in all but name. This op removes EXIF/IPTC/XMP annotations, not colour semantics.
+
 ## 0.18.0
 
 ### Fixed
