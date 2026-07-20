@@ -12,6 +12,7 @@ machine with no ffmpeg installed. See tests/conftest.py.
 """
 
 import os
+import re
 import subprocess
 
 import pytest
@@ -19,6 +20,7 @@ import pytest
 from vidtools.operations import (
     convert_format, screenshot, cut_video, resize_video,
     extract_audio,
+    normalize_audio,
 )
 from vidtools.audio_ops import cut_audio, normalize_audio
 from vidtools.progress import FfmpegError
@@ -308,3 +310,32 @@ def test_extract_audio_strips_location_keeps_title(tmp_path):
         ["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "default", str(kept)],
         capture_output=True, text=True).stdout.lower()
     assert "37.7749" in kept_tags and "secret" in kept_tags
+
+
+@pytest.mark.ffmpeg
+def test_normalize_two_pass_parses_real_ffmpeg_output(tmp_path):
+    """The mocked test asserts the filter shape; only real ffmpeg proves the
+    regex still matches what `print_format=summary` emits.
+
+    This is the gap that let the mocked version pass on the fallback branch for
+    its entire life: a mock can assert any string shape you like, including one
+    ffmpeg never produces.
+    """
+    src = tmp_path / "quiet.wav"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi",
+        "-i", "sine=frequency=440:duration=2", str(src)],
+        check=True, capture_output=True)
+
+    out = tmp_path / "loud.wav"
+    normalize_audio(str(src), str(out), target_loudness=-16.0)
+    assert out.exists() and out.stat().st_size > 0
+
+    measured = subprocess.run([
+        "ffmpeg", "-y", "-i", str(out), "-vn",
+        "-af", "loudnorm=I=-16:print_format=summary", "-f", "null", "-"],
+        capture_output=True, text=True).stderr
+    m = re.search(r"Input Integrated:\s+([-\d.]+)", measured)
+    assert m, "ffmpeg's summary format changed; normalize_audio's parse is now dead"
+    assert -20.0 < float(m.group(1)) < -12.0, (
+        f"normalized to {m.group(1)} LUFS, expected near -16")

@@ -132,10 +132,32 @@ class TestAdjustImage:
             assert img.size == (100, 200)
 
     def test_flip_horizontal(self, sample_image, tmp_path):
+        """Assert the pixels actually mirror, not just that the size survived.
+
+        The previous version checked only `img.size == (200, 100)`. A flip
+        preserves dimensions -- and so does doing nothing at all, so a no-op
+        implementation passed. `sample_image` is four distinct quadrants
+        precisely so this is testable; on a flat fill a real flip and a no-op
+        are pixel-identical and the property is untestable in principle.
+        """
+        import numpy as np
         out = str(tmp_path / "flipped.png")
         adjust_image(sample_image, out, flip="horizontal")
-        with Image.open(out) as img:
-            assert img.size == (200, 100)  # same dimensions
+        with Image.open(sample_image) as src, Image.open(out) as img:
+            assert img.size == src.size
+            before, after = np.array(src), np.array(img)
+            assert np.array_equal(after, before[:, ::-1]), "not mirrored on x"
+            assert not np.array_equal(after, before), "flip was a no-op"
+
+
+    def test_flip_vertical(self, sample_image, tmp_path):
+        import numpy as np
+        out = str(tmp_path / "flipped_v.png")
+        adjust_image(sample_image, out, flip="vertical")
+        with Image.open(sample_image) as src, Image.open(out) as img:
+            before, after = np.array(src), np.array(img)
+            assert np.array_equal(after, before[::-1, :]), "not mirrored on y"
+            assert not np.array_equal(after, before), "flip was a no-op"
 
 
 class TestGetImageInfo:

@@ -73,17 +73,51 @@ class TestNormalizeAudio:
     def test_normalize_builds_loudnorm(self, mock_run, mock_subprocess):
         # Mock the first pass (analysis)
         mock_result = MagicMock()
+        # Real `print_format=summary` output. The previous mock used
+        # `measured_I=-25.0`, a shape ffmpeg never emits, so the regex never
+        # matched and this test silently exercised the single-pass fallback for
+        # its entire life while being named for the two-pass path.
         mock_result.stderr = (
-            'measured_I=-25.0\nmeasured_TP=-1.0\nmeasured_LRA=10.0\n'
-            'measured_thresh=-35.0\n'
+            "[Parsed_loudnorm_0 @ 0x600000] \n"
+            "Input Integrated:    -25.0 LUFS\n"
+            "Input True Peak:      -1.0 dBTP\n"
+            "Input LRA:            10.0 LU\n"
+            "Input Threshold:     -35.0 LUFS\n"
         )
         mock_subprocess.run.return_value = mock_result
 
         normalize_audio("input.mp3", "output.mp3", target_loudness=-16)
-        # Should have called run_ffmpeg_command for pass 2
         assert mock_run.called
         cmd = mock_run.call_args[0][0]
-        assert any("loudnorm" in str(arg) for arg in cmd)
+        chain = " ".join(str(a) for a in cmd)
+
+        # Asserting only `"loudnorm" in cmd` could not tell the two-pass branch
+        # from the single-pass fallback -- both emit the filter. What makes this
+        # two-pass is that pass 1's *measurements* reach pass 2.
+        assert "measured_I=-25.0" in chain
+        assert "measured_TP=-1.0" in chain
+        assert "measured_LRA=10.0" in chain
+        assert "measured_thresh=-35.0" in chain
+        assert "linear=true" in chain
+        assert "I=-16" in chain, "target loudness not applied"
+
+    @patch("vidtools.audio_ops.run_ffmpeg")
+    @patch("vidtools.audio_ops.subprocess")
+    def test_normalize_falls_back_to_single_pass_when_analysis_unparseable(
+        self, mock_subprocess, mock_run
+    ):
+        """The other branch, which nothing covered. Unparseable pass-1 output
+        must still normalize -- via single-pass -- rather than crash or silently
+        emit a filter carrying no measurements."""
+        mock_result = MagicMock()
+        mock_result.stderr = "ffmpeg produced nothing parseable here"
+        mock_subprocess.run.return_value = mock_result
+
+        normalize_audio("input.mp3", "output.mp3", target_loudness=-16)
+        chain = " ".join(str(a) for a in mock_run.call_args[0][0])
+        assert "loudnorm" in chain
+        assert "measured_I" not in chain, "fallback must not fake measurements"
+        assert "I=-16" in chain
 
 
 class TestFadeAudio:
