@@ -56,7 +56,7 @@ action = {"action": {
         "COMMAND_STRING": script,
         "CheckedForUserDefaultShell": True,
         "inputMethod": 1,          # pass the selection as arguments, not stdin
-        "shell": "/bin/bash",
+        "shell": "/bin/zsh",
         "source": "",
     },
     "BundleIdentifier": "com.apple.RunShellScript",

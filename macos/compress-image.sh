@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 # Quick Action body: compress the selected images via vidtools.
 #
 # Installed into the user's Services folder by macos/install.sh, which
@@ -15,6 +15,10 @@
 #   cannot draw a multi-control panel, and three sequential prompts to compress
 #   a file is worse than one list of sensible outcomes.
 # * PATH is minimal under Automator, so every binary is called by absolute path.
+# * zsh, not bash. /bin/bash on macOS is still 3.2.57, where `set -u` plus an
+#   empty-array expansion is a fatal "unbound variable" -- which would have hit
+#   exactly the one preset that passes no flags. zsh 5.9 is the platform default
+#   and handles it. Verified on macOS 26.5.2.
 
 set -uo pipefail
 
@@ -84,8 +88,14 @@ for f in "$@"; do
 
     before=$(/usr/bin/stat -f%z "$f" 2>/dev/null || echo 0)
     if "$VIDTOOLS" compress "${ARGS[@]}" "$f" "$out" >/dev/null 2>&1; then
-        written=$(/bin/ls "$dir/${stem}_compressed".* 2>/dev/null | /usr/bin/head -1)
-        after=$(/usr/bin/stat -f%z "$written" 2>/dev/null || echo 0)
+        # Glob rather than parsing `ls` output, so filenames with spaces and
+        # quotes survive. A stale file from an earlier run in a different format
+        # can still be picked up here; the size report is best-effort.
+        after=0
+        for cand in "$dir/${stem}_compressed."*; do
+            [ -f "$cand" ] || continue
+            after=$(/usr/bin/stat -f%z "$cand" 2>/dev/null || echo 0)
+        done
         ok=$((ok + 1))
         total_before=$((total_before + before))
         total_after=$((total_after + after))

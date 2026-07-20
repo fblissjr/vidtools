@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.23.1
+
+### Fixed
+- **The Quick Action's most neutral preset aborted before doing anything.** The embedded script ran under `/bin/bash`, which on macOS is still 3.2.57 even on 26.x — and there `set -u` combined with expanding an empty array is a fatal `unbound variable`. "Balanced (WebP)" is the one preset that passes no flags, so it built an empty argument array and died. It now runs under `/bin/zsh` (5.9, the platform default), which handles it.
+  - The end-to-end test that "verified" 0.23.0 drove a preset that *does* set flags, so it never touched the broken path.
+- Output size is now found by globbing rather than parsing `ls` output, so filenames containing spaces, quotes, or glob metacharacters (`my photo's "best" shot.png`, `weird[1]name.png`) survive.
+
 ## 0.23.0
 
 ### Added
