@@ -127,6 +127,28 @@ The `dl-live` CLI command and `ytdlp-live` web op record YouTube/HLS live broadc
 - Single-frame grab (`screenshot`): ffmpeg extracts one lossless frame via `_grab_frame`; PIL re-encodes jpg/webp through `image_ops.convert_image` (one quality scale 1-100, and works even when ffmpeg is built without libwebp). Fast input `-ss` by default, output `-ss` for `--accurate`. **Gotcha:** when `-ss` overshoots the input, ffmpeg's image2 muxer writes zero frames and still exits 0, so `_grab_frame` verifies a non-empty file was produced and raises `FfmpegError` otherwise (without this, png grabs silently produce nothing and lossy grabs raise a cryptic PIL error).
 - Always work with the latest ffmpeg documentation and features.
 
+## Path privacy
+
+Every path written into repo content must be relative to the repo root. Anything
+resolving outside it -- another checkout, a home-directory path, an agent-state
+directory -- is a leak, in code, comments, docs, commit messages and branch
+names alike.
+
+`pre-commit` and `commit-msg` hooks enforce this and hard-block on a finding. Do
+not bypass with `--no-verify`; fix the path and re-stage.
+
+**The hooks live under `.git/hooks`, which git does not track, so a fresh clone
+has no protection until they are reinstalled.** Run the `path-privacy` skill's
+`install-git-hooks.sh`; the same directory holds `find-external-paths.sh` for an
+on-demand audit of the working tree.
+
+A line that genuinely needs an external-looking path (regex source, a worked
+example) can carry the literal opt-out token the scanner looks for -- see the
+skill's own docs. Use it sparingly.
+
+When fixing a leak, keep it quiet: vague commit message, no changelog entry
+naming what was scrubbed. Advertising the fix defeats it.
+
 ## Versioning
 
 When bumping version, update three places: `vidtools/_version.py`, `pyproject.toml`, `CHANGELOG.md` (semver, no dates, no major bumps without permission).
