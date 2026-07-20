@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.23.0
+
+### Added
+- **Finder Quick Action for macOS** (`macos/install.sh`). Right-click images, pick a result, get compressed copies alongside the originals. Verified end to end: an 11.3 MB source came out at 84 KB.
+  - **One menu entry opening a preset list**, not one entry per operation — the convention macOS's own Convert Image follows, and it stops the Quick Actions menu filling up. Presets are outcome-shaped (*Smallest, sized for AI vision* / *Balanced* / *Visually lossless* / *Lossless* / *Balanced but keep metadata*) rather than flag-shaped, because someone right-clicking a file is choosing a result.
+  - The workflow bundle is **generated at install time, not checked in**: the embedded script needs the machine's absolute path to the `vidtools` binary, which must not appear in the repo, and a `.wflow` is an opaque plist that reviews badly. The reviewable artifact — `macos/compress-image.sh` — stays in plain sight with a `@VIDTOOLS_BIN@` placeholder.
+  - Automator rather than a native app, so there is no signing or notarisation step. The trade is that AppleScript cannot draw a multi-control panel, so it is a single preset list instead of the Format / Size / Preserve Metadata trio. That script is what a native front end would call if the trade stops being worth it.
+  - Calls the venv binary directly rather than `uv run` (measured 0.11s vs 0.13s startup) and every other binary by absolute path, because Automator runs with a minimal PATH.
+
 ## 0.22.0
 
 ### Added

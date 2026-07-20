@@ -220,6 +220,33 @@ uv --project /path/to/vidtools run yt-dlp \
   "<live broadcast url>"
 ```
 
+## Finder Quick Action (macOS)
+
+Right-click images in Finder, pick a result, get compressed copies alongside
+the originals.
+
+```bash
+bash macos/install.sh              # install
+bash macos/install.sh --uninstall  # remove
+```
+
+One menu entry that opens a preset list, rather than one entry per operation --
+the convention macOS's own Convert Image follows, and it keeps the Quick Actions
+menu from filling up. Presets are outcome-shaped: *Smallest, sized for AI
+vision*, *Balanced*, *Visually lossless*, *Lossless*, *Balanced but keep
+metadata*.
+
+The bundle is generated at install time rather than checked in: the embedded
+script needs your machine's absolute path to the `vidtools` binary, and a
+`.wflow` is an opaque plist. The reviewable part -- `macos/compress-image.sh` --
+stays in plain sight.
+
+Automator rather than a native app, so there is no code-signing or notarisation
+step. The trade is that AppleScript cannot draw a multi-control panel, so it is
+one preset list instead of the Format / Size / Preserve Metadata trio. If that
+becomes limiting, `macos/compress-image.sh` is what a native front end would
+call.
+
 ## Architecture
 
 Operations are split by media type and re-exported from a thin facade:
