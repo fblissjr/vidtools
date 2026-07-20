@@ -105,20 +105,6 @@ def _prepare_for_resample(img: Image.Image) -> Image.Image:
     return img.convert("I")  # 16-bit integer modes
 
 
-def _warn_large_decode(input_file: str) -> None:
-    """Report an unusually large decode in the tool's own voice."""
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            with Image.open(input_file) as probe:
-                w, h = probe.size
-        logger.warning("Large image; decode may use significant memory",
-                       path=input_file, width=w, height=h,
-                       megapixels=round(w * h / 1e6, 1))
-    except Exception:  # noqa: BLE001 - reporting must never break the open
-        pass
-
-
 @contextmanager
 def _pil_errors_as_value_error(input_file: str):
     """Translate Pillow's own exceptions into `ValueError`.
@@ -148,25 +134,28 @@ def _pil_errors_as_value_error(input_file: str):
 def _open_guarded(input_file: str) -> Image.Image:
     """`Image.open` with the bomb guard reported in the tool's own voice.
 
-    Every `simplefilter` call sits inside its own `catch_warnings()` block. An
-    earlier version called `simplefilter("ignore", ...)` after the block had
-    exited, which permanently mutated the process-global warnings filter: one
-    large image silenced `DecompressionBombWarning` for everything running in
-    that interpreter, including unrelated libraries and later tests.
+    Pillow warns between its soft limit (~89 MP) and its hard limit (2x that,
+    where it raises instead). Images in that band are legitimate -- a 100 MP
+    panorama is not an attack -- so the warning is restated as a one-line notice
+    rather than surfaced raw, which would quote an internal venv path and the
+    words "DOS attack".
+
+    Recorded rather than raised: turning the warning into an error meant opening
+    the file once to trip it, again to read its size for the message, and a
+    third time to get a usable handle. `record=True` captures it in passing, so
+    one open serves all three purposes.
     """
     with _pil_errors_as_value_error(input_file):
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("error", Image.DecompressionBombWarning)
-                return Image.open(input_file)
-        except Image.DecompressionBombWarning:
-            pass  # legitimate but large; fall through to a reported open
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", Image.DecompressionBombWarning)
+            handle = Image.open(input_file)
 
-    _warn_large_decode(input_file)
-    with _pil_errors_as_value_error(input_file):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
-            return Image.open(input_file)
+    if any(issubclass(w.category, Image.DecompressionBombWarning) for w in caught):
+        width, height = handle.size
+        logger.warning("Large image; decode may use significant memory",
+                       path=input_file, width=width, height=height,
+                       megapixels=round(width * height / 1e6, 1))
+    return handle
 
 
 @contextmanager

@@ -1887,7 +1887,7 @@ wheels = [
 
 [[package]]
 name = "vidtools"
-version = "0.27.1"
+version = "0.27.2"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },

@@ -89,11 +89,33 @@ def build_workflow(script: str) -> dict:
     }
 
 
+def build_info_plist(name: str) -> dict:
+    """The bundle's Info.plist -- what actually registers the service.
+
+    Generated here rather than in an install.sh heredoc for the same reason
+    document.wflow is: these keys carry the identical silent-failure mode. A
+    bundle missing NSMessage, NSRequiredContext or NSSendFileTypes installs
+    cleanly, passes `plutil -lint`, and never appears in the Finder menu.
+    Leaving this one in a heredoc left that failure fully reachable, one file
+    away from where the fix was applied.
+    """
+    return {"NSServices": [{
+        "NSBackgroundColorName": "background",
+        "NSIconName": "NSActionTemplate",
+        "NSMenuItem": {"default": name},
+        "NSMessage": "runWorkflowAsService",
+        "NSRequiredContext": {"NSApplicationIdentifier": "com.apple.finder"},
+        "NSSendFileTypes": ["public.image"],
+    }]}
+
+
 def main() -> None:
     script = open(os.environ["SCRIPT_SRC"]).read().replace(
         "@VIDTOOLS_BIN@", os.environ["BIN"])
     with open(sys.argv[1], "wb") as fh:
         plistlib.dump(build_workflow(script), fh)
+    with open(sys.argv[2], "wb") as fh:
+        plistlib.dump(build_info_plist(os.environ["NAME"]), fh)
 
 
 if __name__ == "__main__":

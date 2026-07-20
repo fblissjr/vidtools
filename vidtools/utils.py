@@ -190,13 +190,9 @@ def _ffmpeg_capabilities(kind: str) -> set[str] | None:
     return names
 
 
-def _ffmpeg_filters() -> set[str] | None:
-    return _ffmpeg_capabilities("filters")
-
-
 def _ffmpeg_has_filter(name: str) -> bool | None:
     """True/False if known, None if the build could not be probed."""
-    filters = _ffmpeg_filters()
+    filters = _ffmpeg_capabilities("filters")
     return None if filters is None else name in filters
 
 
@@ -218,7 +214,16 @@ _ENCODER_HINTS = {
 
 
 def require_encoder(name: str) -> None:
-    """Raise a message naming the gap before ffmpeg emits a cryptic one."""
+    """Raise a message naming the gap before ffmpeg emits a cryptic one.
+
+    Only the encoders in `_ENCODER_HINTS` are probed. Probing every encode
+    would add an `ffmpeg -encoders` spawn to every convert/resize/trim that
+    re-encodes -- a subprocess and up to a 15s timeout budget, to confirm
+    libx264 exists. The risky set is small and known: it is exactly the
+    encoders Homebrew's slim formula omits.
+    """
+    if name not in _ENCODER_HINTS:
+        return
     if _ffmpeg_has_encoder(name) is not False:
         return  # present, or unprobeable -- let ffmpeg speak for itself
     hint = _ENCODER_HINTS.get(name, f"This output needs the '{name}' encoder")

@@ -97,3 +97,40 @@ def test_generated_plist_passes_plutil(tmp_path):
     path.write_bytes(plistlib.dumps(doc))
     r = subprocess.run(["plutil", "-lint", str(path)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# The Info.plist is what actually registers the service. It carries the same
+# silent-failure mode as document.wflow -- drop a key and the bundle installs
+# cleanly, lints fine, and never appears in the menu -- so it gets the same
+# pinned-contract treatment rather than living in an untested heredoc.
+
+REQUIRED_SERVICE_KEYS = {
+    "NSMenuItem", "NSMessage", "NSRequiredContext", "NSSendFileTypes",
+}
+
+
+def test_info_plist_carries_every_registration_key():
+    svc = make_workflow.build_info_plist("Compress Image")["NSServices"][0]
+    missing = REQUIRED_SERVICE_KEYS - set(svc)
+    assert not missing, f"missing {sorted(missing)}; the action will not register"
+
+
+def test_info_plist_targets_finder_and_images():
+    svc = make_workflow.build_info_plist("Compress Image")["NSServices"][0]
+    assert svc["NSMessage"] == "runWorkflowAsService"
+    assert svc["NSRequiredContext"]["NSApplicationIdentifier"] == "com.apple.finder"
+    assert svc["NSSendFileTypes"] == ["public.image"]
+
+
+def test_info_plist_menu_name_follows_the_bundle_name():
+    """The menu entry and the bundle directory must agree, or the action
+    installs under one name and appears under another."""
+    svc = make_workflow.build_info_plist("Some Name")["NSServices"][0]
+    assert svc["NSMenuItem"]["default"] == "Some Name"
+
+
+def test_info_plist_round_trips(tmp_path):
+    doc = make_workflow.build_info_plist("Compress Image")
+    p = tmp_path / "Info.plist"
+    p.write_bytes(plistlib.dumps(doc))
+    assert plistlib.loads(p.read_bytes()) == doc

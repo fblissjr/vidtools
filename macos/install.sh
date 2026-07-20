@@ -38,31 +38,10 @@ fi
 mkdir -p "$BUNDLE/Contents"
 SCRIPT_SRC="$REPO_ROOT/macos/compress-image.sh"
 
-BIN="$BIN" SCRIPT_SRC="$SCRIPT_SRC" python3 "$REPO_ROOT/macos/make_workflow.py" \
-    "$BUNDLE/Contents/document.wflow"
+BIN="$BIN" SCRIPT_SRC="$SCRIPT_SRC" NAME="$NAME" \
+    python3 "$REPO_ROOT/macos/make_workflow.py" \
+    "$BUNDLE/Contents/document.wflow" "$BUNDLE/Contents/Info.plist"
 
-cat > "$BUNDLE/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>NSServices</key>
-  <array>
-    <dict>
-      <key>NSBackgroundColorName</key><string>background</string>
-      <key>NSIconName</key><string>NSActionTemplate</string>
-      <key>NSMenuItem</key>
-      <dict><key>default</key><string>$NAME</string></dict>
-      <key>NSMessage</key><string>runWorkflowAsService</string>
-      <key>NSRequiredContext</key>
-      <dict><key>NSApplicationIdentifier</key><string>com.apple.finder</string></dict>
-      <key>NSSendFileTypes</key>
-      <array><string>public.image</string></array>
-    </dict>
-  </array>
-</dict>
-</plist>
-PLIST
 
 /System/Library/CoreServices/pbs -flush >/dev/null 2>&1 || true
 
