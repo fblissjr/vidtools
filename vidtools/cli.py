@@ -465,8 +465,10 @@ For stream-copy mode, all inputs must share codec parameters."""
     concat.add_argument("-o", "--output", required=True, help="Output file")
     concat.add_argument("--reencode", action="store_true",
                         help="Re-encode (slower, handles different codecs)")
+    _add_preserve_metadata(concat)
     def _concat(args):
-        operations.concatenate_videos(args.inputs, args.output, use_copy=not args.reencode)
+        operations.concatenate_videos(args.inputs, args.output, use_copy=not args.reencode,
+                                      preserve_metadata=args.preserve_metadata)
     concat.set_defaults(func=_concat)
 
     # ---------------------------------------------------------------- subtitles
@@ -502,10 +504,12 @@ Examples:
                                   help="Input video file")
     add_audio_parser.add_argument("audio", type=lambda x: is_valid_file(add_audio_parser, x),
                                   help="Audio file to add")
+    _add_preserve_metadata(add_audio_parser)
     add_audio_parser.add_argument("output", help="Output video file")
     def _add_audio(args):
         operations.add_audio(args.input, args.audio, args.output,
-                             mode="mix" if args.mix else "replace", volume=args.volume)
+                             mode="mix" if args.mix else "replace", volume=args.volume,
+                             preserve_metadata=args.preserve_metadata)
     add_audio_parser.set_defaults(func=_add_audio)
 
     # ---------------------------------------------------------------- match-duration
@@ -531,11 +535,13 @@ Examples:
     match_duration.add_argument("--crf", type=int, help="CRF quality (0-51) for re-encode")
     match_duration.add_argument("--hwaccel", action="store_true",
                                 help="Hardware acceleration (macOS VideoToolbox)")
+    _add_preserve_metadata(match_duration)
     _add_io(match_duration, "Input video")
     def _match_duration(args):
         operations.trim_to_audio(args.input, args.output, buffer=args.buffer,
                                  accurate=args.accurate, video_codec=args.video_codec,
-                                 audio_codec=args.audio_codec, crf=args.crf, hwaccel=args.hwaccel)
+                                 audio_codec=args.audio_codec, crf=args.crf, hwaccel=args.hwaccel,
+                                 preserve_metadata=args.preserve_metadata)
     match_duration.set_defaults(func=_match_duration)
 
     # ---------------------------------------------------------------- slideshow
@@ -873,6 +879,7 @@ NOT supported: concat, slideshow, extract-*, add-audio, preset.
 Step order is preserved in the filter chain. trim input args are pulled before
 the input file regardless of position. convert is always terminal."""
     )
+    _add_preserve_metadata(pipeline)
     pipeline.add_argument("input", help="Input video file")
     pipeline.add_argument("output", help="Output video file")
     pipeline.add_argument("steps", nargs=argparse.REMAINDER,
@@ -884,7 +891,8 @@ the input file regardless of position. convert is always terminal."""
             raise SystemExit("pipeline requires at least one step")
         if _detect_kind(args.input) != "video":
             raise SystemExit("pipeline only supports video inputs in v1")
-        Pipeline(args.input, args.output, steps).run()
+        Pipeline(args.input, args.output, steps,
+                 preserve_metadata=args.preserve_metadata).run()
     pipeline.set_defaults(func=_pipeline)
 
     # ==========================================================================

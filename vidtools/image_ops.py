@@ -78,12 +78,21 @@ def _ext(path: str) -> str:
     return os.path.splitext(path)[1].lower()
 
 
-def _prepare_for_resample(img: Image.Image) -> Image.Image:
-    """Return an image the high-quality resampling filters can actually handle.
+def _supports_alpha(supported: set[str] | None) -> bool:
+    """Whether a container can store an alpha channel at all."""
+    return supported is None or bool(supported & {"RGBA", "LA", "PA"})
 
-    LANCZOS rejects bilevel and 16-bit modes outright, and resampling a palette
-    image interpolates palette *indices* rather than colours, which produces
-    arbitrary hues. Promote to a continuous-tone mode first.
+
+def _prepare_for_resample(img: Image.Image) -> Image.Image:
+    """Promote modes that resample badly to a continuous-tone mode first.
+
+    Pillow silently downgrades to NEAREST for `1` and `P` modes regardless of
+    the filter requested, so a palette image asked for LANCZOS quietly gets
+    nearest-neighbour instead -- aliased output, not the requested quality.
+    Promoting first means the filter actually applies.
+
+    (Pillow 11.0 added filter support for `I;16*`, so the 16-bit promotion is
+    belt-and-braces for older builds rather than a hard requirement here.)
     """
     if img.mode not in _RESAMPLE_UNSUPPORTED:
         return img
@@ -163,33 +172,35 @@ def _save_image(img: Image.Image, output_file: str, quality: int | None = None,
     """
     ext = _ext(output_file)
     save_kwargs: dict[str, Any] = dict(extra)
-
     supported = _FORMAT_MODES.get(ext)
+
+    # 1. Alpha first. This must precede the generic mode conversion below: a bare
+    #    `.convert("RGB")` *discards* the alpha channel and keeps whatever RGB
+    #    values sat underneath, which in real transparent PNGs is (0,0,0) -- so a
+    #    logo on a transparent field came out on a black field rather than white.
+    has_alpha = img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info
+    if has_alpha and not _supports_alpha(supported):
+        rgba = img.convert("RGBA")
+        backdrop = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        backdrop.paste(rgba, mask=rgba.split()[-1])
+        # Always land on RGB here and let step 2 pick the container's mode.
+        # Choosing the final mode inline repeated the L-before-P mistake and
+        # desaturated GIF output a second way.
+        img = backdrop.convert("RGB")
+
+    # 2. Whatever mode remains, make it one the container can store.
     if supported is not None and img.mode not in supported:
-        # Pick the closest representable mode rather than failing: keep alpha
-        # if the target can store it, keep greyscale if the source was grey.
-        if "RGBA" in supported and (img.mode in ("RGBA", "LA", "PA")
-                                    or "transparency" in img.info):
-            img = img.convert("RGBA")
-        elif img.mode in ("I", "I;16", "I;16B", "I;16L", "F") and "L" in supported:
+        if img.mode in ("I", "I;16", "I;16B", "I;16L", "F") and "L" in supported:
             img = img.convert("I").point(lambda v: v * (1 / 257)).convert("L")
         elif "RGB" in supported:
             img = img.convert("RGB")
+        elif "P" in supported:
+            # Before "L": palette keeps colour, greyscale throws it away. GIF
+            # declares {"L", "P"} and no "RGB", so an L-first order silently
+            # desaturated every colour image saved as .gif.
+            img = img.convert("P", palette=Image.Palette.ADAPTIVE)
         elif "L" in supported:
             img = img.convert("L")
-        elif "P" in supported:
-            img = img.convert("P", palette=Image.Palette.ADAPTIVE)
-
-    if ext in _NO_ALPHA_EXTS and img.mode not in ("RGB", "L", "CMYK"):
-        # Flatten onto white rather than converting straight to RGB: a bare
-        # convert composites transparent pixels onto black.
-        if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
-            backdrop = Image.new("RGB", img.size, (255, 255, 255))
-            rgba = img.convert("RGBA")
-            backdrop.paste(rgba, mask=rgba.split()[-1])
-            img = backdrop
-        else:
-            img = img.convert("RGB")
 
     if quality is not None and ext in _QUALITY_EXTS:
         save_kwargs["quality"] = quality
@@ -207,6 +218,13 @@ def _save_image(img: Image.Image, output_file: str, quality: int | None = None,
     exif = _build_exif(img, preserve_metadata)
     if exif:
         save_kwargs["exif"] = exif
+
+    # Pillow's JPEG encoder reads `comment` from im.info when the caller does not
+    # supply one, so a source COM marker rides straight past the EXIF allowlist.
+    # It is free-form text -- exactly the payload class that turned up as 109 KB
+    # of generation prompt in video comment tags -- so clear it explicitly.
+    if not preserve_metadata and ext in _JPEG_EXTS:
+        save_kwargs.setdefault("comment", b"")
 
     img.save(output_file, **save_kwargs)
 
@@ -290,25 +308,53 @@ def create_thumbnail(input_file: str, output_file: str, size: int = 256,
 
 
 def strip_image_metadata(input_file: str, output_file: str):
-    """Remove annotations from an image without altering a single pixel.
+    """Remove EXIF/IPTC/XMP annotations, preserving the image as far as the
+    output format allows.
+
+    **This is a re-encode, not a container edit.** For a lossy target that means
+    the pixels are not bit-identical: a JPEG decode/encode round-trip is lossy
+    even with the source's own quantization tables. What this op guarantees is
+    that it does not *degrade* the image -- it does not silently re-quantize to
+    a lower quality, and it does not alter colour or geometry.
+
+    Getting that guarantee needs explicit work. Pillow's JPEG encoder defaults
+    to quality 75 when the caller omits `quality`, so a naive save halved a
+    quality-95 source (119 KB -> 57 KB, 92% of pixels changed) while claiming to
+    touch only metadata. Carrying `qtables`/`subsampling` across keeps the size
+    and quality of the original.
+
+    Two things are deliberately kept:
+
+    * The **ICC profile** -- dropping it changes how the image renders, which is
+      a pixel-level change in all but name.
+    * **Display orientation** -- `_open_image` bakes EXIF rotation into the
+      raster, so the stored buffer may differ from the source's while the
+      rendered result is identical. That is the point: it lets the orientation
+      tag be dropped without the image flipping.
 
     The previous implementation built `Image.new(img.mode, img.size)` and pasted
     into it. For a palette image that allocates a *default* palette, and pasting
-    between two P-mode images copies raw indices without remapping -- so the
-    output was the source's indices read against an unrelated colour table, and
-    a four-colour PNG came out solid black.
-
-    The ICC profile is deliberately kept. Dropping it would change how the image
-    renders, which is a pixel-level change in everything but name; this op
-    removes EXIF/IPTC/XMP annotations, not colour semantics.
+    P-into-P copies raw indices without remapping, so a four-colour PNG came out
+    solid black.
     """
-    img = _open_image(input_file)
     ext = _ext(output_file)
     supported = _FORMAT_MODES.get(ext)
+
+    with Image.open(input_file) as handle:
+        source_quantization = getattr(handle, "quantization", None)
+        source_subsampling = None
+        if handle.format == "JPEG":
+            try:
+                from PIL import JpegImagePlugin
+                source_subsampling = JpegImagePlugin.get_sampling(handle)
+            except Exception:  # pragma: no cover - malformed/unusual JPEG
+                source_subsampling = None
+
+    img = _open_image(input_file)
     if supported is not None and img.mode not in supported:
         raise ValueError(
             f"Cannot write a {img.mode} image as '{ext}' without converting its "
-            f"colour mode, and strip-metadata must not alter pixels. Use a "
+            f"colour mode, and strip-metadata must not alter the image. Use a "
             f"container that supports {img.mode} (e.g. .tiff), or convert "
             f"explicitly with `vidtools convert` first."
         )
@@ -322,7 +368,15 @@ def strip_image_metadata(input_file: str, output_file: str):
             clean.putpalette(palette)
         if "transparency" in img.info:
             clean.info["transparency"] = img.info["transparency"]
-    save_kwargs = {"icc_profile": profile} if profile else {}
+
+    save_kwargs: dict[str, Any] = {}
+    if profile:
+        save_kwargs["icc_profile"] = profile
+    if ext in _JPEG_EXTS and source_quantization:
+        # Without these the encoder silently re-quantizes at its default of 75.
+        save_kwargs["qtables"] = source_quantization
+        if source_subsampling is not None:
+            save_kwargs["subsampling"] = source_subsampling
     clean.save(output_file, **save_kwargs)
 
     logger.info("Image metadata stripped", output=output_file)

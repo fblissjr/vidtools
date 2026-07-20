@@ -242,3 +242,68 @@ def test_percentage_resize_never_produces_a_zero_dimension(tmp_path, dims):
     image_ops.resize_image(str(src), out, percentage=0.25)
     with Image.open(out) as result:
         assert result.width >= 1 and result.height >= 1
+
+
+# ---------------------------------------------------------------------------
+# 9. Regressions found by review of this work
+# ---------------------------------------------------------------------------
+
+def test_colour_survives_gif_output(tmp_path):
+    """GIF declares {"L", "P"} and no "RGB", so an L-before-P fallback order
+    silently desaturated every colour image saved as .gif."""
+    arr = np.zeros((60, 90, 3), np.uint8)
+    arr[:, :30], arr[:, 30:60], arr[:, 60:] = (255, 0, 0), (0, 255, 0), (0, 0, 255)
+    src = tmp_path / "c.png"
+    Image.fromarray(arr).save(src)
+    out = str(tmp_path / "c.gif")
+    image_ops.convert_image(str(src), out)
+    with Image.open(out) as result:
+        colours = {tuple(c) for c in
+                   np.unique(np.asarray(result.convert("RGB")).reshape(-1, 3), axis=0)}
+    assert not all(r == g == b for r, g, b in colours), f"gif came out greyscale: {colours}"
+
+
+@pytest.mark.parametrize("ext", ["jpg", "bmp", "gif"])
+def test_transparency_flattens_onto_white_not_black(tmp_path, ext):
+    """Real transparent PNGs store (0,0,0) under alpha=0, so a bare
+    `convert("RGB")` puts the subject on a black field. The composite step
+    existed but was dead code -- the mode-conversion block ran first."""
+    rgba = np.zeros((40, 40, 4), np.uint8)
+    rgba[10:30, 10:30] = (30, 144, 255, 255)
+    src = tmp_path / "logo.png"
+    Image.fromarray(rgba, "RGBA").save(src)
+    out = str(tmp_path / f"logo.{ext}")
+    image_ops.convert_image(str(src), out)
+    with Image.open(out) as result:
+        field = result.convert("RGB").getpixel((1, 1))
+    assert min(field) > 200, f".{ext} transparent field came out {field}, expected near-white"
+
+
+def test_jpeg_comment_marker_does_not_leak(tmp_path):
+    """Pillow's JPEG encoder falls back to im.info["comment"], which bypasses
+    the EXIF allowlist entirely. Free-form text is exactly the payload class
+    that showed up as 109 KB of generation prompt in video comment tags."""
+    src = tmp_path / "c.jpg"
+    Image.fromarray(np.full((40, 40, 3), 120, np.uint8)).save(src, comment=b"a secret prompt")
+    out = str(tmp_path / "out.jpg")
+    image_ops.convert_image(str(src), out)
+    with Image.open(out) as result:
+        assert not result.info.get("comment"), "JPEG comment marker survived the strip"
+
+
+def test_strip_metadata_does_not_requantize_jpeg(tmp_path):
+    """Pillow defaults to quality=75 when none is given, so a naive save halved
+    a quality-95 source while claiming to touch only metadata. A JPEG round-trip
+    is never bit-exact, but it must not *degrade*."""
+    rng = np.random.default_rng(0)
+    base = Image.fromarray(rng.integers(0, 256, (64, 64, 3), dtype=np.uint8))
+    src = tmp_path / "hq.jpg"
+    base.resize((512, 512), Image.Resampling.LANCZOS).save(src, quality=95)
+    out = str(tmp_path / "stripped.jpg")
+    image_ops.strip_image_metadata(str(src), out)
+
+    before, after = os.path.getsize(src), os.path.getsize(out)
+    assert after > before * 0.9, (
+        f"stripping metadata shrank a quality-95 JPEG from {before} to {after} bytes -- "
+        "the encoder re-quantized at its default quality"
+    )

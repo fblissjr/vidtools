@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.20.1
+
+All of the below were found by review of the 0.16.0-0.20.0 work and verified by execution before and after.
+
+### Fixed
+- **`strip-metadata` no longer re-quantizes JPEGs.** Pillow's encoder defaults to quality 75 when the caller omits `quality`, so stripping metadata from a quality-95 photo halved it — 119 KB to 57 KB, with 92% of pixels changed — while the docstring claimed it altered none. The source's quantization tables and subsampling are now carried across. A JPEG round-trip is still not bit-exact (it is a decode/encode, not a container edit) and the documentation now says so rather than overclaiming.
+- **Colour survives GIF output.** `.gif` declares modes `{L, P}` and no `RGB`, so the fallback order tried greyscale before palette and silently desaturated every colour image saved as `.gif`.
+- **Transparency flattens onto white, not black.** The composite step existed but was unreachable: the colour-mode conversion ran first and did a bare `convert("RGB")`, which discards alpha and exposes whatever sits underneath — (0,0,0) in real transparent PNGs. Affected `.jpg`, `.bmp` and `.gif` output.
+- **JPEG comment markers no longer leak.** Pillow reads `comment` from `im.info` when the caller supplies none, bypassing the EXIF allowlist entirely. Free-form text is the same payload class that appeared as 109 KB of generation prompt in video comment tags.
+- **`pipeline` applies the metadata policy.** It ran the same operations as the individual verbs but stripped nothing, so `vidtools pipeline in.mp4 out.mp4 trim ... resize ...` carried GPS through while `vidtools resize` on the same file removed it — reachable by the route a user takes to *avoid* re-encoding.
+- **`--preserve-metadata` reaches every verb that supports it.** `concat`, `add-audio`, `match-duration` and `pipeline` had the underlying parameter but never exposed the flag, so 0.20.0's claim that they were covered was only half true.
+- Video metadata stripping now passes `-map_metadata:s -1` as well as `-map_metadata -1`, matching `sanitize`. In testing the bare form already cleared per-stream tags on a stream copy, but only the global scope is documented behaviour, and a privacy default should not rest on that.
+- `add-subtitles` applies the metadata policy.
+- Removed stale web-UI references missed by 0.16.0: the package description, a `package-data` glob pointing at the deleted `web/`, and two module docstrings.
+
+### Known gaps (not fixed here)
+- **`audio_ops.py` has no metadata policy at all.** ID3/Vorbis tags — artist, comment, encoder — pass through `convert`, `trim`, `normalize`, `fade`, `resample` and `clean` untouched. Same class as the video leak fixed in 0.20.0; deferred rather than rushed, since it is a separate surface with its own tag semantics.
+- `extract-audio`, `extract-frames` and `slideshow` still carry source metadata.
+
 ## 0.20.0
 
 ### Changed (privacy)

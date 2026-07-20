@@ -1,8 +1,8 @@
 """Thread-local progress sink. Operations call report_progress() without
 knowing or caring about who's consuming the events.
 
-The CLI sets a tqdm-based sink; the web server sets a WebSocket-broadcasting
-sink. Operations stay free of progress callbacks in their signatures.
+The CLI sets a tqdm-based sink. Operations stay free of progress callbacks
+in their signatures.
 
 Pattern is the same as Python's logging module or Flask's `g`: ambient
 context carried through thread-local storage.

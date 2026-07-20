@@ -110,7 +110,12 @@ def _add_metadata_policy(command: list, preserve_metadata: bool = False) -> None
     files, a 109 KB comment tag containing an entire generation prompt.
     """
     if not preserve_metadata:
-        command.extend(["-map_metadata", "-1"])
+        # Both levels. In testing `-map_metadata -1` alone already cleared the
+        # per-stream tags on a stream copy, but the documented scope of the bare
+        # form is global metadata only, and `sanitize_video` has always passed
+        # both. On a privacy default, match the stricter form rather than rely
+        # on behaviour that is not promised.
+        command.extend(["-map_metadata", "-1", "-map_metadata:s", "-1"])
 
 
 def cut_video(input_file, output_file, start_time=None, end_time=None, duration=None,
@@ -304,10 +309,12 @@ def crop_video(input_file, output_file, width, height, x, y, preserve_metadata=F
     run_ffmpeg(command)
 
 
-def add_subtitles(input_file, output_file, subtitles_file):
+def add_subtitles(input_file, output_file, subtitles_file, preserve_metadata=False):
     """Adds subtitles to video."""
     escaped = _escape_subtitle_path(subtitles_file)
-    command = ["ffmpeg", "-y", "-i", input_file, "-vf", f"subtitles='{escaped}'", output_file]
+    command = ["ffmpeg", "-y", "-i", input_file, "-vf", f"subtitles='{escaped}'"]
+    _add_metadata_policy(command, preserve_metadata)
+    command.append(output_file)
     run_ffmpeg(command)
 
 

@@ -1,5 +1,5 @@
 """
-vidtools - FFmpeg + PIL media processing tool with web UI and CLI.
+vidtools - FFmpeg + PIL + yt-dlp media processing CLI.
 """
 
 from ._version import __version__, __version_info__
