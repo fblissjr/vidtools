@@ -73,18 +73,38 @@ action = {"action": {
     "isViewVisible": 1,
 }}
 
+FINDER = "/System/Library/CoreServices/Finder.app"
+
 plistlib.dump({
-    "AMApplicationBuild": "999",
+    "AMApplicationBuild": "526",
     "AMApplicationVersion": "2.10",
     "AMDocumentVersion": "2",
     "actions": [action],
     "connectors": {},
+    # Every key here is present in a Quick Action that Automator itself wrote,
+    # and was arrived at by diffing against one. A hand-written subset that
+    # looks sufficient is not: an earlier version carried only the six
+    # service* / presentationMode / workflowTypeIdentifier keys, which loads
+    # without complaint and never appears in the Finder menu. The
+    # non-service-prefixed twins (applicationBundleID, inputTypeIdentifier,
+    # processesInput) are what Finder actually reads; the service* ones alone
+    # are not enough. presentationMode is 15, not 512.
     "workflowMetaData": {
+        "applicationBundleID": "com.apple.finder",
+        "applicationBundleIDsByPath": {FINDER: "com.apple.finder"},
+        "applicationPath": FINDER,
+        "applicationPaths": [FINDER],
+        "inputTypeIdentifier": "com.apple.Automator.fileSystemObject.image",
+        "outputTypeIdentifier": "com.apple.Automator.nothing",
+        "presentationMode": 15,
+        "processesInput": False,
+        "serviceApplicationBundleID": "com.apple.finder",
+        "serviceApplicationPath": FINDER,
         "serviceInputTypeIdentifier": "com.apple.Automator.fileSystemObject.image",
         "serviceOutputTypeIdentifier": "com.apple.Automator.nothing",
-        "serviceApplicationBundleID": "com.apple.finder",
-        "serviceApplicationName": ["Finder"],
-        "presentationMode": 512,       # Quick Action
+        "serviceProcessesInput": False,
+        "systemImageName": "NSActionTemplate",
+        "useAutomaticInputType": False,
         "workflowTypeIdentifier": "com.apple.Automator.servicesMenu",
     },
 }, open(sys.argv[1], "wb"))
@@ -98,6 +118,8 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
   <key>NSServices</key>
   <array>
     <dict>
+      <key>NSBackgroundColorName</key><string>background</string>
+      <key>NSIconName</key><string>NSActionTemplate</string>
       <key>NSMenuItem</key>
       <dict><key>default</key><string>$NAME</string></dict>
       <key>NSMessage</key><string>runWorkflowAsService</string>
