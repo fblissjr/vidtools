@@ -6,8 +6,11 @@ Guidance for Claude Code working in this repository.
 
 vidtools is an FFmpeg + PIL + yt-dlp media processing CLI (`vidtools` / `vt` console scripts).
 
-A FastAPI + WebSocket web UI was removed in 0.16.0 — see CHANGELOG. The CLI is
-the only surface; a macOS Quick Action wrapper is planned as the second one.
+A FastAPI + WebSocket web UI was removed in 0.16.0 — see CHANGELOG. There are
+two surfaces: the CLI, and a macOS Finder Quick Action (shipped 0.23.0) under
+`macos/`. The Quick Action embeds a `compress` invocation into its bundle at
+install time, so a CLI change to `compress` does not reach it until
+`macos/install.sh` is re-run.
 
 Python >=3.12. Requires `ffmpeg` >= 5.1 and `yt-dlp` in PATH.
 
@@ -42,7 +45,7 @@ Modules under `vidtools/`:
 
 - **operations.py** — thin facade (`from .video_ops import *` etc.). Existing imports (`from vidtools.operations import cut_video`) still work. Add new ops to the appropriate `*_ops.py` file, not here.
 - **video_ops.py** — FFmpeg video operations + shared filter-builder helpers reused by `pipeline.py`.
-- **image_ops.py** — PIL image operations (no ffmpeg). Synchronous; no progress reporting needed. **All seven ops route through `_open_image` / `_save_image`** — do not call `Image.open` / `.save` directly. `_open_image` bakes EXIF orientation into the pixels (so geometry ops act on what the user actually sees) and carries the ICC profile across; `_save_image` flattens alpha for containers that can't store it, converts to a mode the container declares in `_FORMAT_MODES`, passes `quality` to every encoder that takes one, re-attaches the ICC profile, and applies the metadata policy via `_build_exif`. The six imaging defects fixed in 0.17.0 were one missing abstraction, not six bugs — that's why they were mutually inconsistent. `strip_image_metadata` is the deliberate exception: it edits the container rather than re-rendering, so it has its own save path.
+- **image_ops.py** — PIL image operations (no ffmpeg). Synchronous; no progress reporting needed. **Every op that renders pixels routes through `_open_image` / `_save_image`** — do not call `Image.open` / `.save` directly. The three inspect-only call sites use `_open_raw` instead (see below). `_open_image` bakes EXIF orientation into the pixels (so geometry ops act on what the user actually sees) and carries the ICC profile across; `_save_image` flattens alpha for containers that can't store it, converts to a mode the container declares in `_FORMAT_MODES`, passes `quality` to every encoder that takes one, re-attaches the ICC profile, and applies the metadata policy via `_build_exif`. The six imaging defects fixed in 0.17.0 were one missing abstraction, not six bugs — that's why they were mutually inconsistent. `strip_image_metadata` is the deliberate exception: it edits the container rather than re-rendering, so it has its own save path.
 
 Three call sites legitimately need the *undecoded* original — `strip_image_metadata` plus the two inspectors (`get_image_info`, `describe_color_profile`), which must not transpose what they report on. They open via **`_open_raw`**, which shares `_open_image`'s hostile-input error translation without applying orientation or ICC. Never call bare `Image.open`: PIL's own exceptions (`DecompressionBombError`, `UnidentifiedImageError`) are not caught by `main()` and reach the user as a traceback printing absolute paths.
 - **compress.py** — measured format *and* quality search for images. Encodes candidates with Pillow (no `cwebp`/`avifenc`/`oxipng` subprocesses), scores each against the original with SSIM, and writes the smallest that meets the fidelity target. Full-image SSIM is authoritative; the high-variance probe crop only narrows the starting bracket and can never veto a candidate (it vetoed 7 of 18 real images before 0.18.0). Defaults to PNG/JPEG/WebP — AVIF compresses roughly 2x better but no major vision API decodes it, so it's opt-in behind `--allow-avif` (naming a `.avif` output implies the flag). A content classifier (flat-run fraction + hard-edge density) raises the target to `FLAT_TARGET_SSIM` for text/line art, whose ringing SSIM barely registers. Caveat stated in the module docstring: SSIM is a mediocre perceptual metric, chosen because it's computable with numpy alone and is monotonic in encode quality. Opens via `_open_image`, so EXIF orientation is applied and the ICC profile is carried into every candidate encode — it went through a bare `Image.open` until 0.21.0, which rendered portrait phone photos sideways.

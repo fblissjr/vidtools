@@ -11,6 +11,13 @@ PATH; yt-dlp in PATH for URL downloads. The image verbs are pure PIL and run on
 a machine with no ffmpeg at all — the toolchain check is scoped to the
 invocations that actually need it.
 
+**On macOS, `brew install ffmpeg` is not enough for every verb.** Homebrew's
+`ffmpeg` formula carries ten dependencies and omits libass, libaom-av1 and
+libvorbis. That means `subtitles` burn-in is unavailable (it reports this
+clearly rather than failing cryptically), and the `av1_quality` preset and
+`.ogg` output will fail. `brew install ffmpeg-full` is the batteries-included
+build. WebP is unaffected — images encode through PIL, not ffmpeg.
+
 ```bash
 uv sync
 uv run vidtools <command> [options]
@@ -87,7 +94,20 @@ vidtools compress photo.jpg --target-ssim 0.99       # fidelity target 0-1 (defa
 vidtools compress photo.jpg --max-size 500k          # byte budget; maximises fidelity within it
 vidtools compress logo.png --lossless                # exact encodes only, smallest wins
 vidtools compress photo.jpg --allow-avif             # opt into AVIF
+vidtools compress photo.jpg --fit vision             # downscale for a vision API first
 ```
+
+`--fit` downscales to what the destination will actually keep, before
+compressing. Sending an image past a vision API's ceiling means it resamples on
+arrival — you paid to compress detail that gets thrown away, and took a second
+resampling pass in quality. `vision` targets Claude's high-resolution tier,
+`vision-standard` the smaller one. It never upscales, and it solves in patch
+space rather than pixel area, because a partial 28x28 patch costs a whole token.
+
+Output never overwrites a previous run when the name is derived: a second
+`vidtools compress photo.jpg` writes `photo_compressed-2.<ext>` rather than
+replacing the first result. An output you name explicitly is overwritten as
+usual — auto-renaming what you asked for would break scripts.
 
 Defaults to PNG/JPEG/WebP — the formats the Claude and Gemini vision APIs
 accept. AVIF usually compresses far better but no major vision API decodes it,
@@ -167,7 +187,8 @@ included.
 
 Verbs that take `--preserve-metadata`: `convert`, `resize`, `crop`, `trim`,
 `rotate`, `concat`, `add-audio`, `match-duration`, `thumbnail`, `optimize`,
-`adjust`, `pipeline`, `subtitles`, `normalize`, `fade`, `resample`, `clean`.
+`adjust`, `pipeline`, `subtitles`, `normalize`, `fade`, `resample`, `clean`,
+`extract-audio`, `extract-frames`, `slideshow`.
 `sanitize` and `strip-metadata` always strip — that is their job.
 
 **Audio inverts the default, on purpose.** For a photo or a clip, metadata is
@@ -179,9 +200,9 @@ free-form and recorder ones (`comment`, `description`, `encoded_by`, `location`,
 `make`, `model`). `comment` is the one that matters — it is where an entire
 generation prompt turned up in the video case.
 
-**Not yet covered.** The policy does not reach everything:
-
-- `extract-audio`, `extract-frames` and `slideshow` still carry source metadata.
+`extract-audio` takes the **audio** policy rather than the video one, because
+its output is an audio file: title and artist survive, location and comment are
+blanked. `extract-frames` and `slideshow` strip.
 
 ### Presets
 
@@ -239,7 +260,14 @@ metadata*.
 The bundle is generated at install time rather than checked in: the embedded
 script needs your machine's absolute path to the `vidtools` binary, and a
 `.wflow` is an opaque plist. The reviewable part -- `macos/compress-image.sh` --
-stays in plain sight.
+stays in plain sight, and `macos/make_workflow.py` builds the plist so it can be
+tested.
+
+**Python changes reach the action immediately** (the venv install is editable),
+but the shell script is embedded into the bundle at install time -- editing
+`macos/compress-image.sh` needs a re-run of `install.sh` to take effect. Moving
+the repo also breaks the action, which fails with a visible alert rather than
+doing nothing silently.
 
 Automator rather than a native app, so there is no code-signing or notarisation
 step. The trade is that AppleScript cannot draw a multi-control panel, so it is
