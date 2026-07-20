@@ -407,10 +407,11 @@ Use --keep-audio to preserve original audio bytes; --no-audio to strip audio."""
     extract_audio.add_argument("-f", "--format", default="copy",
                                help="Audio format (copy, mp3, aac, flac, ...). Default: copy")
     _add_time_range(extract_audio)
+    _add_preserve_metadata(extract_audio)
     _add_io(extract_audio, "Input video", "Output audio file")
     def _extract_audio(args):
         operations.extract_audio(args.input, args.output, args.format, args.start_time,
-                                 args.end_time, args.duration)
+                                 args.end_time, args.duration, args.preserve_metadata)
     extract_audio.set_defaults(func=_extract_audio)
 
     # ---------------------------------------------------------------- extract-frames
@@ -422,10 +423,11 @@ Use --keep-audio to preserve original audio bytes; --no-audio to strip audio."""
                                 help="Frame rate (fps) to extract. Default: 1")
     extract_frames.add_argument("--format", default="image2", help="Muxer/format. Default: image2")
     _add_time_range(extract_frames)
+    _add_preserve_metadata(extract_frames)
     _add_io(extract_frames, "Input video", "Output pattern (e.g. frame_%%04d.jpg)")
     def _extract_frames(args):
         operations.extract_frames(args.input, args.output, args.rate, args.format, args.start_time,
-                                  args.end_time, args.duration)
+                                  args.end_time, args.duration, args.preserve_metadata)
     extract_frames.set_defaults(func=_extract_frames)
 
     # ---------------------------------------------------------------- screenshot
@@ -571,13 +573,15 @@ Examples:
                            help="Audio file to add as a soundtrack")
     slideshow.add_argument("--sanitize-crop", help="Crop EACH image before resizing. Format W:H:X:Y")
     slideshow.add_argument("--sanitize-noise", type=int, help="Add noise to EACH image (0-100)")
+    _add_preserve_metadata(slideshow)
     slideshow.add_argument("pattern", help="Input image glob (e.g. 'images/*.png')")
     slideshow.add_argument("output", help="Output video file")
     def _slideshow(args):
         operations.create_slideshow(args.pattern, args.output, args.duration, args.fps,
                                     size=args.size, audio_file=args.audio,
                                     resize_mode=args.resize_mode, pad_color=args.pad_color,
-                                    sanitize_crop=args.sanitize_crop, sanitize_noise=args.sanitize_noise)
+                                    sanitize_crop=args.sanitize_crop, sanitize_noise=args.sanitize_noise,
+                                    preserve_metadata=args.preserve_metadata)
     slideshow.set_defaults(func=_slideshow)
 
     # ---------------------------------------------------------------- srt-from-transcript

@@ -96,12 +96,16 @@ blanking specific keys, avoiding a separate ffprobe pass.
 
 **Verbs exposing `--preserve-metadata`**: `convert`, `resize`, `crop`, `trim`,
 `rotate`, `concat`, `add-audio`, `match-duration`, `thumbnail`, `optimize`,
-`adjust`, `pipeline`, `subtitles`, `normalize`, `fade`, `resample`, `clean`.
+`adjust`, `pipeline`, `subtitles`, `normalize`, `fade`, `resample`, `clean`,
+`extract-audio`, `extract-frames`, `slideshow`.
 Added to a parser via `cli._add_preserve_metadata`.
+
+`extract-audio` takes the **audio** policy rather than the video one — its
+output is an audio file, so title/artist survive while location and comment are
+blanked. `extract-frames` and `slideshow` strip.
 
 **Known gaps — do not claim coverage the code does not have:**
 
-- `extract-audio`, `extract-frames` and `slideshow` still carry source metadata.
 - `sanitize` always strips and has no opt-in (by design — that is the verb's job).
 
 ## Common tasks

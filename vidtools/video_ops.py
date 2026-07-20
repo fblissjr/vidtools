@@ -14,6 +14,7 @@ from .utils import run_ffmpeg, logger, VIDEO_EXTS, AUDIO_EXTS
 from .progress import FfmpegError
 from .image_ops import convert_image
 from .audio_ops import AUDIO_CODEC_MAP, _auto_codec
+from .audio_ops import _add_metadata_policy as _add_audio_metadata_policy
 from . import presets
 
 # --- Codec defaults ---
@@ -205,23 +206,39 @@ def convert_format(input_file, output_file, format_type, video_codec=None, audio
 
 
 def extract_audio(input_file, output_file, audio_format="copy", start_time=None, end_time=None,
-                  duration=None):
-    """Extracts audio from video."""
+                  duration=None, preserve_metadata: bool = False):
+    """Extracts audio from video.
+
+    Takes the *audio* policy, not the video one: the output is an audio file, so
+    descriptive tags (title, artist, album) survive while free-form and recorder
+    fields (comment, location, make, model) are blanked. Ripping the audio off a
+    video used to carry the container's GPS and comment through untouched.
+    """
     command = ["ffmpeg", "-y", "-i", input_file, "-vn"]
     _add_time_range_args(command, start_time, end_time, duration)
     command.extend(["-c:a", audio_format])
+    _add_audio_metadata_policy(command, preserve_metadata)
     command.append(output_file)
     run_ffmpeg(command)
 
 
 def extract_frames(input_file, output_pattern, frame_rate=1, image_format="image2",
-                   start_time=None, end_time=None, duration=None):
-    """Extracts frames from video."""
+                   start_time=None, end_time=None, duration=None,
+                   preserve_metadata: bool = False):
+    """Extracts frames from video.
+
+    Frames are images, so the strip-by-default policy applies. Most still
+    encoders ignore container tags anyway, but the muxer is chosen by the caller
+    via `image_format` and some (e.g. writing to a TIFF or a video container)
+    do carry them, so the policy is applied rather than assumed unnecessary.
+    """
     if frame_rate <= 0:
         raise ValueError(f"frame_rate must be positive, got {frame_rate}")
     command = ["ffmpeg", "-y", "-i", input_file]
     _add_time_range_args(command, start_time, end_time, duration)
-    command.extend(["-r", str(frame_rate), "-f", image_format, output_pattern])
+    command.extend(["-r", str(frame_rate), "-f", image_format])
+    _add_metadata_policy(command, preserve_metadata)
+    command.append(output_pattern)
     run_ffmpeg(command)
 
 
@@ -492,7 +509,8 @@ def _parse_crop_value(value_str: str, dimension: int) -> int:
 def create_slideshow(image_pattern: str, output_file: str, duration_per_image: float = 3.0, fps: int = 24,
                      size: str | None = None, audio_file: str | None = None,
                      resize_mode: str = "stretch", pad_color: str = "0,0,0",
-                     sanitize_crop: str | None = None, sanitize_noise: int | None = None):
+                     sanitize_crop: str | None = None, sanitize_noise: int | None = None,
+                     preserve_metadata: bool = False):
     """Creates a slideshow video from a sequence of images using the PIL + FFmpeg pipeline."""
     image_files = sorted(glob.glob(image_pattern))
     if not image_files:
@@ -561,6 +579,7 @@ def create_slideshow(image_pattern: str, output_file: str, duration_per_image: f
 
         command.extend(["-c:v", "libx264", "-r", str(fps), "-pix_fmt", "yuv420p"])
         command.extend(["-c:a", "aac", "-shortest"])
+        _add_metadata_policy(command, preserve_metadata)
         _add_faststart_if_mp4(command, output_file)
         command.append(output_file)
 

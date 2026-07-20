@@ -15,6 +15,8 @@ from vidtools.operations import (
     trim_to_audio,
     screenshot,
     convert_format,
+    extract_audio,
+    extract_frames,
 )
 
 
@@ -613,3 +615,33 @@ class TestPipelineMetadataPolicy:
                        [PipelineStep("resize", {"percentage": 0.5})],
                        preserve_metadata=True).build_command()
         assert "-map_metadata" not in cmd
+
+
+# --- G12: the three ops that used to carry source metadata through ---------
+#
+# extract_audio produces audio, so it takes the *audio* policy (descriptive
+# tags kept, free-form and recorder fields blanked). extract_frames and
+# slideshow produce images/video, so they strip.
+
+def test_extract_audio_drops_identifying_tags(capture_ffmpeg):
+    extract_audio("in.mp4", "out.m4a")
+    cmd = capture_ffmpeg[0]
+    assert "-map_metadata" in cmd and cmd[cmd.index("-map_metadata") + 1] == "0"
+    for tag in ("comment", "location", "make", "model"):
+        assert f"{tag}=" in cmd, f"{tag} not blanked"
+
+
+def test_extract_audio_preserve_keeps_everything(capture_ffmpeg):
+    extract_audio("in.mp4", "out.m4a", preserve_metadata=True)
+    assert "-map_metadata" not in capture_ffmpeg[0]
+
+
+def test_extract_frames_strips_metadata(capture_ffmpeg):
+    extract_frames("in.mp4", "f_%03d.png")
+    cmd = capture_ffmpeg[0]
+    assert cmd[cmd.index("-map_metadata") + 1] == "-1"
+
+
+def test_extract_frames_preserve_metadata(capture_ffmpeg):
+    extract_frames("in.mp4", "f_%03d.png", preserve_metadata=True)
+    assert "-map_metadata" not in capture_ffmpeg[0]

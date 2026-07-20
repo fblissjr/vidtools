@@ -18,6 +18,7 @@ import pytest
 
 from vidtools.operations import (
     convert_format, screenshot, cut_video, resize_video,
+    extract_audio,
 )
 from vidtools.audio_ops import cut_audio, normalize_audio
 from vidtools.progress import FfmpegError
@@ -274,3 +275,36 @@ class TestMetadataPrivacyReal:
             assert displayed(out) == before, (
                 f"{label} changed the displayed orientation: {before} -> {displayed(out)}"
             )
+
+
+@pytest.mark.ffmpeg
+def test_extract_audio_strips_location_keeps_title(tmp_path):
+    """Real ffmpeg: the audio policy must survive an actual mux.
+
+    Command-shape tests prove the flags are emitted; only running ffmpeg proves
+    the tags are actually absent from the container afterwards.
+    """
+    src = tmp_path / "src.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=160x120:rate=10",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+        "-metadata", "location=+37.7749-122.4194/",
+        "-metadata", "comment=SECRET",
+        "-metadata", "title=Keep This",
+        str(src)], check=True, capture_output=True)
+
+    out = tmp_path / "out.m4a"
+    extract_audio(str(src), str(out), audio_format="aac")
+    tags = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "default", str(out)],
+        capture_output=True, text=True).stdout.lower()
+    assert "secret" not in tags
+    assert "37.7749" not in tags
+    assert "keep this" in tags, "descriptive tags must survive the audio policy"
+
+    kept = tmp_path / "kept.m4a"
+    extract_audio(str(src), str(kept), audio_format="aac", preserve_metadata=True)
+    kept_tags = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "default", str(kept)],
+        capture_output=True, text=True).stdout.lower()
+    assert "37.7749" in kept_tags and "secret" in kept_tags
