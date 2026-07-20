@@ -20,6 +20,7 @@ class TestCliErrorHandling:
 
     def test_bad_rotation_exits_cleanly(self, sample_image, tmp_path, monkeypatch):
         import sys
+
         from vidtools import cli
         out = str(tmp_path / "o.png")
         monkeypatch.setattr(sys, "argv", ["vidtools", "rotate", "-r", "abc", sample_image, out])

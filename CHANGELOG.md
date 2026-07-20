@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.17.0
+
+### Fixed
+All six defects below were verified by execution before and after the fix. The 304-test suite passed against every one of them.
+
+- **EXIF orientation is applied, not discarded.** `Image.open` does not rotate by orientation tag, so a phone photo arrived as a landscape buffer. `crop` therefore operated on pixels the user could not see — cropping a region off a portrait photo hit the wrong part of the image — and every op dropped the tag on save, so output displayed sideways in viewers that had previously corrected it. Orientation is now baked into pixels on open.
+- **ICC colour profiles survive.** Profiles were dropped on `.jpg` and `.webp` output but kept on `.png` and `.avif` — not by design, but because Pillow's PNG and AVIF plugins fall back to `im.info` while its JPEG and WebP plugins read the save kwarg only. A Display-P3 image converted to JPEG was silently reinterpreted as sRGB.
+- **`strip-metadata` no longer destroys palette images.** It built `Image.new(mode, size)` and pasted into it; for P-mode that allocates a *default* palette, and pasting P-into-P copies raw indices without remapping. A four-colour PNG came out solid black.
+- **`--quality` reaches the AVIF encoder.** Only jpg/jpeg/webp were passed a quality argument, so every `.avif` export used Pillow's default of 75. quality=1 and quality=100 produced byte-identical files.
+- **Off-axis rotation no longer bakes in black corners.** `Image.rotate` was called without `fillcolor`, so the corners exposed by a non-right-angle rotation were zero-filled — opaque black on any RGB image, with no way to override. Exposed corners are now transparent by default, with a new `--fill` option.
+- **Palette and alpha inputs no longer crash on JPEG output.** `convert` flattened RGBA/P/LA before saving; `resize`, `crop` and `thumbnail` did not, so identical input raised `OSError: cannot write mode P as JPEG` depending on which verb you used. Flattening now composites onto white rather than converting straight to RGB, which would composite transparency onto black.
+
+### Added
+- **A metadata privacy policy, applied by default.** Identifying metadata — GPS coordinates, camera make/model, capture timestamps — is stripped from output. Rendering-critical data (orientation, colour profile) is always preserved, since it is part of the image rather than an annotation on it.
+  - `--preserve-metadata` keeps authorship tags (copyright, artist, description). It does **not** re-admit GPS: provenance and location are different categories.
+  - The tag list is an allowlist, so a tag nobody has classified is not a leak.
+  - This differs from macOS's Convert Image, which preserves by default. These verbs write a *new* file, so the original retains everything while a leaked location does not come back, and the dominant use here is compress-to-share.
+- `adjust --fill` sets the corner colour for non-right-angle rotations (default transparent).
+- `info` reports *displayed* dimensions for rotated images, with `raw_width`/`raw_height` when they differ. A portrait phone photo previously reported its landscape buffer.
+
+### Internal
+- Added `_open_image` / `_save_image` in `image_ops.py`; all seven ops route through them. The six defects above were one missing abstraction rather than six independent bugs, which is why they were mutually inconsistent.
+
 ## 0.16.1
 
 ### Fixed

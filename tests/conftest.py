@@ -22,7 +22,6 @@ from PIL import Image, ImageCms
 
 from vidtools import progress as progress_mod
 
-
 # ---------------------------------------------------------------------------
 # collection: skip on capability, not on file location
 # ---------------------------------------------------------------------------

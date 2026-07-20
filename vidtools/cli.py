@@ -106,6 +106,21 @@ def _parse_size(value: str) -> int:
     return size
 
 
+def _add_preserve_metadata(parser):
+    """Add `--preserve-metadata` (default off).
+
+    Identifying metadata (GPS, camera make/model, capture time) is stripped by
+    default: these verbs write a new file, so the original keeps everything,
+    while a leaked location does not come back. This flag keeps authorship
+    tags (copyright, artist, description) -- it never re-admits GPS.
+    Rendering data (orientation, colour profile) is preserved either way.
+    """
+    parser.add_argument(
+        "--preserve-metadata", action="store_true",
+        help="Keep authorship metadata (copyright/artist). Identifying tags "
+             "(GPS, camera model) are always stripped.")
+
+
 def _add_time_range(parser):
     """Add the standard `--start` / `--end` / `--duration` time-range flags."""
     parser.add_argument("--start", dest="start_time", help="Start time (e.g. 00:01:30, 90, 1:30)")
@@ -197,6 +212,7 @@ Examples:
     convert.add_argument("--copy", action="store_true", help="Stream-copy where possible (no re-encode)")
     convert.add_argument("--hwaccel", action="store_true", help="Hardware acceleration (macOS VideoToolbox)")
     _add_time_range(convert)
+    _add_preserve_metadata(convert)
     _add_io(convert)
     def _convert_video(args):
         fmt = args.format or Path(args.output).suffix.lstrip(".")
@@ -211,7 +227,8 @@ Examples:
             duration=args.duration, preset=args.preset, use_copy=args.copy, hwaccel=args.hwaccel)
     def _convert_image(args):
         image_ops.convert_image(args.input, args.output,
-                                quality=args.quality if args.quality is not None else 85)
+                                quality=args.quality if args.quality is not None else 85,
+                                preserve_metadata=args.preserve_metadata)
     def _convert_audio(args):
         bitrate = args.bitrate
         if bitrate is None and args.quality is not None:
@@ -243,13 +260,15 @@ Examples:
                  "area", "bicubiclina", "gauss", "sinc", "lanczos", "spline"],
         help="Scaling algorithm (default: lanczos)",
     )
+    _add_preserve_metadata(resize)
     _add_io(resize)
     def _resize_video(args):
         operations.resize_video(args.input, args.output, percentage=args.percentage,
                                 width=args.width, height=args.height, algorithm=args.algorithm)
     def _resize_image(args):
         image_ops.resize_image(args.input, args.output, percentage=args.percentage,
-                               width=args.width, height=args.height)
+                               width=args.width, height=args.height,
+                               preserve_metadata=args.preserve_metadata)
     resize.set_defaults(func=_make_smart("resize", video=_resize_video, image=_resize_image))
 
     # ---------------------------------------------------------------- crop ----
@@ -261,11 +280,13 @@ Examples:
     crop.add_argument("-H", "--height", type=int, required=True, help="Crop height")
     crop.add_argument("-x", type=int, default=0, help="X offset (default: 0)")
     crop.add_argument("-y", type=int, default=0, help="Y offset (default: 0)")
+    _add_preserve_metadata(crop)
     _add_io(crop)
     def _crop_video(args):
         operations.crop_video(args.input, args.output, args.width, args.height, args.x, args.y)
     def _crop_image(args):
-        image_ops.crop_image(args.input, args.output, args.width, args.height, args.x, args.y)
+        image_ops.crop_image(args.input, args.output, args.width, args.height, args.x, args.y,
+                             preserve_metadata=args.preserve_metadata)
     crop.set_defaults(func=_make_smart("crop", video=_crop_video, image=_crop_image))
 
     # ---------------------------------------------------------------- trim ----
@@ -314,6 +335,7 @@ Time formats: HH:MM:SS.mmm, seconds (66.5), or MM:SS"""
     )
     rotate.add_argument("-r", "--rotation", required=True,
                         help="Degrees. Video: 90/180/270/-90. Image: any angle (clockwise).")
+    _add_preserve_metadata(rotate)
     _add_io(rotate)
     def _rotate_video(args):
         operations.rotate_video(args.input, args.output, args.rotation)
@@ -322,7 +344,8 @@ Time formats: HH:MM:SS.mmm, seconds (66.5), or MM:SS"""
             angle = float(args.rotation)
         except ValueError:
             raise ValueError(f"Invalid rotation {args.rotation!r}: expected a number of degrees")
-        image_ops.adjust_image(args.input, args.output, rotation=angle)
+        image_ops.adjust_image(args.input, args.output, rotation=angle,
+                               preserve_metadata=args.preserve_metadata)
     rotate.set_defaults(func=_make_smart("rotate", video=_rotate_video, image=_rotate_image))
 
     # ═══════════════════════════════════════════════════════ VIDEO-ONLY ══════
@@ -665,9 +688,11 @@ Examples:
     thumbnail = subparsers.add_parser("thumbnail", help="Create an aspect-preserving image thumbnail",
                                       formatter_class=argparse.RawTextHelpFormatter)
     thumbnail.add_argument("-s", "--size", type=int, default=256, help="Max dimension (default: 256)")
+    _add_preserve_metadata(thumbnail)
     _add_io(thumbnail, "Input image")
     def _thumbnail(args):
-        image_ops.create_thumbnail(args.input, args.output, size=args.size)
+        image_ops.create_thumbnail(args.input, args.output, size=args.size,
+                                   preserve_metadata=args.preserve_metadata)
     thumbnail.set_defaults(func=_thumbnail)
 
     # ---------------------------------------------------------------- strip-metadata
@@ -684,10 +709,12 @@ Examples:
     optimize.add_argument("-q", "--quality", type=int, default=80, help="Quality 1-100 (default: 80)")
     optimize.add_argument("--max-width", type=int, help="Max width")
     optimize.add_argument("--max-height", type=int, help="Max height")
+    _add_preserve_metadata(optimize)
     _add_io(optimize, "Input image")
     def _optimize(args):
         image_ops.optimize_image(args.input, args.output, quality=args.quality,
-                                 max_width=args.max_width, max_height=args.max_height)
+                                 max_width=args.max_width, max_height=args.max_height,
+                                 preserve_metadata=args.preserve_metadata)
     optimize.set_defaults(func=_optimize)
 
     # ---------------------------------------------------------------- compress
@@ -744,10 +771,14 @@ decodes it, so it is opt-in via --allow-avif.""",
     adjust.add_argument("--contrast", type=float, help="Contrast factor (1.0 = no change)")
     adjust.add_argument("--rotation", type=int, help="Rotation in degrees (clockwise)")
     adjust.add_argument("--flip", choices=["horizontal", "vertical"], help="Flip direction")
+    adjust.add_argument("--fill", help="Corner fill for non-right-angle rotation "
+                                        "(colour name or #rrggbb; default transparent)")
+    _add_preserve_metadata(adjust)
     _add_io(adjust, "Input image")
     def _adjust(args):
         image_ops.adjust_image(args.input, args.output, brightness=args.brightness,
-                               contrast=args.contrast, rotation=args.rotation, flip=args.flip)
+                               contrast=args.contrast, rotation=args.rotation, flip=args.flip,
+                               fill=args.fill, preserve_metadata=args.preserve_metadata)
     adjust.set_defaults(func=_adjust)
 
     # ══════════════════════════════════════════════════════════════ META ═════
