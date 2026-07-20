@@ -28,6 +28,7 @@ publishing coordinates nobody meant to publish.
 import os
 from typing import Any
 
+import warnings
 from contextlib import contextmanager
 from PIL import Image, UnidentifiedImageError, ImageCms, ImageEnhance, ImageOps
 
@@ -104,6 +105,20 @@ def _prepare_for_resample(img: Image.Image) -> Image.Image:
     return img.convert("I")  # 16-bit integer modes
 
 
+def _warn_large_decode(input_file: str) -> None:
+    """Report an unusually large decode in the tool's own voice."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with Image.open(input_file) as probe:
+                w, h = probe.size
+        logger.warning("Large image; decode may use significant memory",
+                       path=input_file, width=w, height=h,
+                       megapixels=round(w * h / 1e6, 1))
+    except Exception:  # noqa: BLE001 - reporting must never break the open
+        pass
+
+
 @contextmanager
 def _open_raw(input_file: str):
     """`Image.open` with hostile-input errors translated to `ValueError`.
@@ -118,6 +133,22 @@ def _open_raw(input_file: str):
     this they reach the user as a traceback that also prints absolute paths.
     """
     try:
+        with warnings.catch_warnings():
+            # Pillow warns between its soft limit (~89 MP) and its hard limit
+            # (2x that, where it raises). Those images are legitimate -- a 100 MP
+            # panorama is not an attack -- so the warning is converted to a
+            # one-line notice rather than suppressed: the user still learns the
+            # decode is large, without a stack-trace-shaped message quoting an
+            # internal venv path and the words "DOS attack".
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            try:
+                with Image.open(input_file) as handle:
+                    yield handle
+                    return
+            except Image.DecompressionBombWarning:
+                pass
+        _warn_large_decode(input_file)
+        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
         with Image.open(input_file) as handle:
             yield handle
     except Image.DecompressionBombError as exc:

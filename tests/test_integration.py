@@ -192,8 +192,12 @@ class TestMetadataPrivacyReal:
     Only `sanitize` stripped them.
     """
 
+    # staticmethod: pytest 9.1 deprecates class-scoped fixtures defined as
+    # instance methods (removed in 10) -- instance attributes set in them are
+    # not visible to test methods anyway.
     @pytest.fixture(scope="class")
-    def tagged(self, tmp_path_factory):
+    @staticmethod
+    def tagged(tmp_path_factory):
         d = tmp_path_factory.mktemp("tagged")
         src = str(d / "src.mp4")
         _run(["ffmpeg", "-v", "error", "-f", "lavfi",

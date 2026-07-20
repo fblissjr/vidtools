@@ -5,6 +5,8 @@ external encoders. Behavior that depends on what a real encoder does to a real
 photograph lives in tests/test_integration.py instead.
 """
 import io
+import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -506,3 +508,33 @@ class TestFitProfiles:
         report = recommend(photo_png, target_ssim=0.95)
         assert not report.was_resized
         assert report.encoded_width == report.width
+
+
+# --- derived output names must not clobber a previous run ------------------
+
+@pytest.mark.pil_real
+def test_derived_name_does_not_overwrite(tmp_path, photo_png):
+    """A second run (e.g. a different Quick Action preset) must not destroy the
+    first result. The Finder path derives the name, so the user never chose it."""
+    from vidtools.compress import compress_image
+    src = tmp_path / "pic.png"
+    shutil.copy(photo_png, src)
+
+    first = compress_image(str(src)).output_path
+    second = compress_image(str(src)).output_path
+    assert first != second, "second run overwrote the first"
+    assert Path(first).exists() and Path(second).exists()
+    assert "-2" in Path(second).name
+
+
+@pytest.mark.pil_real
+def test_explicit_output_still_overwrites(tmp_path, photo_png):
+    """An explicitly named output keeps normal CLI semantics -- auto-renaming
+    what the caller asked for would break scripts."""
+    from vidtools.compress import compress_image
+    src = tmp_path / "pic.png"
+    shutil.copy(photo_png, src)
+    out = tmp_path / "explicit.jpg"
+    a = compress_image(str(src), str(out)).output_path
+    b = compress_image(str(src), str(out)).output_path
+    assert a == b == str(out)

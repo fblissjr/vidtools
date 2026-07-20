@@ -664,6 +664,24 @@ def recommend(
     )
 
 
+def _unique_path(path: str) -> str:
+    """Return `path`, or the first `<stem>-N<ext>` that does not exist.
+
+    Used only for names this module derives. Not a race-free reservation -- two
+    concurrent runs can still pick the same name -- but the Quick Action
+    processes a selection serially, and the alternative (open with O_EXCL and
+    retry) would have to thread a file handle through the writer for a case
+    that does not arise here.
+    """
+    if not os.path.exists(path):
+        return path
+    stem, ext = os.path.splitext(path)
+    n = 2
+    while os.path.exists(f"{stem}-{n}{ext}"):
+        n += 1
+    return f"{stem}-{n}{ext}"
+
+
 def compress_image(
     input_file: str,
     output_file: str | None = None,
@@ -706,11 +724,16 @@ def compress_image(
                        max_size=max_size, allow_avif=allow_avif, fit=fit,
                        formats=forced)
 
+    # A *derived* name must never clobber. The caller did not choose it, so a
+    # second run -- a different preset from the Finder Quick Action, say --
+    # would silently destroy the first result. An *explicit* output path is left
+    # alone: overwriting what the user named is what every other CLI does, and
+    # auto-renaming it would break scripts.
     if output_file is None:
         base = os.path.splitext(input_file)[0]
-        output_file = f"{base}_compressed.{report.winner.extension}"
+        output_file = _unique_path(f"{base}_compressed.{report.winner.extension}")
     elif append_extension:
-        output_file = f"{output_file}.{report.winner.extension}"
+        output_file = _unique_path(f"{output_file}.{report.winner.extension}")
 
     if dry_run:
         logger.info("Compression dry run", input=input_file, winner=report.winner.label())
