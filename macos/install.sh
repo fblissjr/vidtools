@@ -35,6 +35,12 @@ if [ "${1:-}" = "--uninstall" ]; then
     exit 0
 fi
 
+# Replace the bundle rather than overwriting in place. `mkdir -p` + rewriting
+# the files leaves the bundle *directory's* mtime untouched, so macOS keeps its
+# cached registration and the action stops appearing under System Settings ->
+# Login Items & Extensions -> Finder, even though the services DB still has it
+# and the right-click menu still works. A fresh directory forces a re-scan.
+rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents"
 SCRIPT_SRC="$REPO_ROOT/macos/compress-image.sh"
 

@@ -197,6 +197,8 @@ plutil -lint "$SERVICES/Compress Image.workflow"/Contents/*             # both p
 plutil -p <a working .workflow>/Contents/document.wflow                 # diff against one Automator wrote
 ```
 
+`install.sh` replaces the bundle rather than overwriting it — rewriting files in place leaves the bundle directory's mtime unchanged, so macOS keeps its cached registration and the action silently drops out of System Settings -> Login Items & Extensions -> Finder while still working from the right-click menu.
+
 `install.sh` printing "installed:" only means files were written. macOS silently ignores a bundle whose metadata is incomplete, so check the services DB, not the filesystem.
 
 ### Generate a test video for manual verification
