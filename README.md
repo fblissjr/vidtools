@@ -1,28 +1,17 @@
 # vidtools
 
-Media tools wrapper with a web UI and CLI. Built because I always forget ffmpeg flags.
+Media tools CLI. Built because I always forget ffmpeg flags.
 
-Handles video (FFmpeg), images (PIL), and audio (FFmpeg). Two ways to use it:
-
-1. **Web UI** — mobile-first browser interface, designed so my wife can use it from her phone on our local network
-2. **CLI** — for when I'm at a terminal and know what I want
+Handles video (FFmpeg), images (PIL), and audio (FFmpeg).
 
 ## Quick start
 
-Requires Python 3.12+, ffmpeg ≥ 5.1 and ffprobe in PATH. yt-dlp in PATH for URL downloads.
+Requires Python 3.12+, ffmpeg >= 5.1 and ffprobe in PATH. yt-dlp in PATH for URL downloads.
 
 ```bash
-# Install
 uv sync
-
-# Start the web server (default: http://0.0.0.0:8910)
-uv run uvicorn vidtools.server:app --host 0.0.0.0 --port 8910
-
-# Or use the CLI directly
 uv run vidtools <command> [options]
 ```
-
-On first visit to the web UI, you'll set a password. After that, all access requires login. Files and jobs persist in SQLite (`data/vidtools.db`) and survive restarts.
 
 ## CLI
 
@@ -154,75 +143,22 @@ uv --project /path/to/vidtools run yt-dlp \
   "<live broadcast url>"
 ```
 
-## Web UI
-
-The server exposes a mobile-first interface with three tabs:
-
-- **External Download** — paste an HTTPS URL, pick MP3/WAV/MP4, download via yt-dlp
-- **Process File** — upload a file, pick an operation, run it
-- **My Files** — browse uploaded and output files, download or delete
-
-Real-time progress via WebSocket. Jobs run in background workers (default 2 concurrent) and persist across server restarts. Interrupted jobs are auto-marked FAILED on next startup.
-
-### Environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `VIDTOOLS_DATA_DIR` | `./data` | Where uploads, output, temp files, and SQLite DB live |
-| `VIDTOOLS_CONFIG_DIR` | `~/.config/vidtools` | Password hash and config storage |
-| `VIDTOOLS_MAX_UPLOAD_MB` | `2048` | Max upload size in MB |
-| `VIDTOOLS_CLEANUP_HOURS` | `24` | Auto-delete output files after this many hours |
-
-### API endpoints
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| GET | `/` | No | Serve web UI |
-| GET | `/api/status` | No | Health check, auth status, version |
-| POST | `/api/setup` | No | First-time password setup |
-| POST | `/api/login` | Rate-limited | Authenticate, get session cookie |
-| POST | `/api/logout` | Yes | Clear session |
-| POST | `/api/upload` | Yes | Upload a file |
-| GET | `/api/files` | Yes | List all files |
-| GET | `/api/files/{id}/download` | Yes | Download a file |
-| DELETE | `/api/files/{id}` | Yes | Delete a file |
-| POST | `/api/jobs` | Yes | Create a job (ffmpeg op or yt-dlp download) |
-| GET | `/api/jobs` | Yes | List all jobs |
-| GET | `/api/jobs/{id}` | Yes | Get job status |
-| DELETE | `/api/jobs/{id}` | Yes | Cancel a job |
-| GET | `/api/presets` | Yes | List available presets |
-| WS | `/ws/progress` | Cookie | Real-time job progress updates |
-
-## Deployment
-
-For running as a service on Ubuntu (e.g., a local server on your network):
-
-```bash
-cd deploy
-sudo ./setup.sh
-```
-
-This creates a systemd service with security hardening (NoNewPrivileges, ProtectSystem=strict, PrivateTmp, etc.). See `deploy/vidtools.service` for the full unit file.
-
 ## Architecture
 
 Operations are split by media type and re-exported from a thin facade:
 
-- `video_ops.py` — FFmpeg video operations + shared filter helpers
-- `image_ops.py` — PIL image operations
-- `audio_ops.py` — FFmpeg audio operations
-- `operations.py` — facade (`from .video_ops import *` etc.)
+- `video_ops.py` -- FFmpeg video operations + shared filter helpers
+- `image_ops.py` -- PIL image operations
+- `audio_ops.py` -- FFmpeg audio operations
+- `compress.py` -- measured format/quality search (see `compress` above)
+- `operations.py` -- facade (`from .video_ops import *` etc.)
 
 Cross-cutting infrastructure:
 
-- `progress.py` — thread-local progress sink. Operations call `report_progress(percent, msg)`; CLI installs a tqdm sink, server installs a WebSocket-broadcasting sink. No callback parameters in operation signatures.
-- `db.py` — SQLite at `data/vidtools.db` (WAL mode). `FileRegistry` and `JobStore`. One-time migration from legacy `file_registry.json` runs on first startup.
-- `pipeline.py` — `Pipeline` class chains video ops into a single ffmpeg invocation with combined `-vf` filter chain.
-- `cli.py` — argparse + smart input-type dispatch (`_make_smart`, `_detect_kind`).
-- `server.py` — FastAPI + WebSocket. `_OP_DISPATCH` dict maps operation names to per-op handlers.
-- `jobs.py` — `JobManager` with asyncio.Semaphore concurrency cap and SQLite-backed persistence.
-- `security.py` — bcrypt + JWT + per-IP rate limiter.
-- `ytdlp.py` — yt-dlp subprocess wrapper.
+- `progress.py` -- thread-local progress sink. Operations call `report_progress(percent, msg)`; the CLI installs a tqdm sink. No callback parameters in operation signatures.
+- `pipeline.py` -- `Pipeline` class chains video ops into a single ffmpeg invocation with a combined `-vf` filter chain.
+- `cli.py` -- argparse + smart input-type dispatch (`_make_smart`, `_detect_kind`).
+- `ytdlp.py` -- yt-dlp subprocess wrapper.
 
 ## Project structure
 
@@ -235,24 +171,14 @@ vidtools/
   video_ops.py       # FFmpeg video ops + shared filter helpers
   image_ops.py       # PIL image ops
   audio_ops.py       # FFmpeg audio ops
+  compress.py        # measured format/quality search for images
   utils.py           # run_ffmpeg, ffmpeg version check, file validation
   progress.py        # thread-local progress sink + FfmpegError
-  db.py              # SQLite-backed FileRegistry and JobStore
   pipeline.py        # Pipeline chaining (single ffmpeg invocation)
-  jobs.py            # Job dataclass + JobManager (concurrency + persistence)
-  server.py          # FastAPI server, REST API, WebSocket
-  security.py        # bcrypt, JWT, rate limiting, URL validation
   ytdlp.py           # yt-dlp wrapper
   presets.py         # Preset management with mtime cache
-  web/
-    index.html       # Mobile-first UI, no build step
-    style.css        # Dark/light theme support
-    app.js           # Vanilla JS, manual DOM (no innerHTML)
-deploy/
-  setup.sh           # Ubuntu deployment script
-  vidtools.service   # systemd unit file (hardened)
-data/                # Uploads, output, temp, SQLite DB — gitignored except .gitkeep
-tests/               # 13 files, ~280 tests (run: uv run pytest tests/ -v)
+data/                # Output and temp files -- gitignored except .gitkeep
+tests/               # run: uv run pytest tests/ -v
 ```
 
 ## Tests
@@ -260,5 +186,3 @@ tests/               # 13 files, ~280 tests (run: uv run pytest tests/ -v)
 ```bash
 uv run pytest tests/ -v
 ```
-
-280 tests across security, jobs, operations, video/image/audio ops, ytdlp, server, dispatch, progress, db, pipeline, and separation.

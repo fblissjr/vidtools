@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.0
+
+### Removed
+- **The web UI is gone.** `server.py` (FastAPI + WebSocket), `jobs.py`, `db.py`, `security.py`, `vidtools/web/`, and `deploy/` are deleted — 3,436 lines, along with the 71 tests covering them. The CLI is now the only surface.
+  - Drops five dependencies: `fastapi`, `uvicorn[standard]`, `python-multipart`, `python-jose[cryptography]`, `bcrypt`. The resolved dependency graph goes from 118 packages to 95.
+  - Rationale: the CLI imported none of it, so it was cleanly separable, and it carried real defects that were never going to be worth fixing — image inputs were routed to ffmpeg's video path because the server had no media-kind detection, and uploads had no MIME allowlist, extension allowlist, or magic-byte sniffing. Its test coverage was largely illusory: zero HTTP-level tests existed (no `TestClient` anywhere), and only 1 of 13 dispatch handlers had any test.
+  - A macOS Quick Action is planned as the second surface instead. Git history retains everything if it is ever wanted back.
+
 ## 0.15.0
 
 ### Added
