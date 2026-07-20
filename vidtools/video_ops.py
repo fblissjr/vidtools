@@ -1,3 +1,4 @@
+import functools
 import platform
 import subprocess
 import re
@@ -8,7 +9,6 @@ import tempfile
 from pathlib import Path
 from PIL import Image, ImageOps
 import numpy as np
-import datetime
 
 from .utils import run_ffmpeg, logger, VIDEO_EXTS, AUDIO_EXTS
 from .progress import FfmpegError
@@ -326,8 +326,31 @@ def crop_video(input_file, output_file, width, height, x, y, preserve_metadata=F
     run_ffmpeg(command)
 
 
+@functools.lru_cache(maxsize=None)
+def _ffmpeg_has_filter(name: str) -> bool:
+    """Whether this ffmpeg build exposes `name`. Cached: it cannot change
+    mid-process and `-filters` lists hundreds of entries."""
+    try:
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"],
+                             capture_output=True, text=True, timeout=15).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return any(line.split()[1:2] == [name] for line in out.splitlines() if line.strip())
+
+
 def add_subtitles(input_file, output_file, subtitles_file, preserve_metadata=False):
-    """Adds subtitles to video."""
+    """Burn subtitles into the video.
+
+    Requires an ffmpeg built with libass. Homebrew's default formula ships
+    without it, and the failure is otherwise a filter-parse error that names no
+    cause -- the same shape as the libwebp gap that hid in `screenshot`.
+    """
+    if not _ffmpeg_has_filter("subtitles"):
+        raise FfmpegError(
+            "This ffmpeg has no 'subtitles' filter, so subtitles cannot be "
+            "burned in. It needs to be built with libass "
+            "(e.g. 'brew install ffmpeg --with-libass', or a full build)."
+        )
     escaped = _escape_subtitle_path(subtitles_file)
     command = ["ffmpeg", "-y", "-i", input_file, "-vf", f"subtitles='{escaped}'"]
     _add_metadata_policy(command, preserve_metadata)
@@ -661,11 +684,18 @@ def create_srt_from_transcript(input_file: str, output_file: str):
     logger.info("Starting transcript to SRT conversion", input=input_file, output=output_file)
 
     def _format_time(seconds_float: float) -> str:
-        """Converts a float number of seconds to HH:MM:SS,mmm format."""
-        delta = datetime.timedelta(seconds=seconds_float)
-        hours, remainder = divmod(delta.seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        milliseconds = delta.microseconds // 1000
+        """Converts a float number of seconds to HH:MM:SS,mmm format.
+
+        Computed from total milliseconds rather than `timedelta`: `.seconds`
+        caps at 86399 and rolls the remainder into `.days`, so hour 25 rendered
+        as hour 1 -- a subtitle file that looks valid and is silently wrong past
+        the 24-hour mark. Rounding rather than truncating also stops 1.9995s
+        landing on the previous millisecond.
+        """
+        total_ms = int(round(seconds_float * 1000))
+        hours, rem = divmod(total_ms, 3_600_000)
+        minutes, rem = divmod(rem, 60_000)
+        seconds, milliseconds = divmod(rem, 1000)
         return f"{hours:02}:{minutes:02}:{seconds:02},{milliseconds:03}"
 
     with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
