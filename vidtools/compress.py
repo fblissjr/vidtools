@@ -77,6 +77,18 @@ assert _AVIF_SPEED != 8, "speed=8 is pathological in Pillow's AVIF encoder"
 #: Default fidelity target. Eyeball-calibrated -- see module docstring.
 DEFAULT_TARGET_SSIM = 0.98
 
+#: Minimum target applied to flat content (text, UI, line art).
+#:
+#: SSIM's scale is compressed on hard edges: on a real 1979x1307 terminal
+#: screenshot, WebP q25 scored 0.9898 with visibly mushy, ringing glyphs, while
+#: q60 -- clearly legible -- scored only 0.9951. A 0.005 spread covers the whole
+#: range from bad to fine, so the usual 0.98 target lets the search bottom out
+#: at the lowest quality it is allowed to try.
+#:
+#: Raising the bar for flat content is a stopgap. The real fix is a metric that
+#: sees edge ringing; this keeps text readable until then.
+FLAT_TARGET_SSIM = 0.995
+
 _EXT_FOR_FMT = {"jpeg": "jpg", "webp": "webp", "avif": "avif", "png": "png"}
 _FMT_FOR_EXT = {
     "jpg": "jpeg", "jpeg": "jpeg", "webp": "webp", "avif": "avif", "png": "png",
@@ -435,6 +447,11 @@ def recommend(
     content_class = _classify_content(img)
     probe = _pick_probe_crop(img)
 
+    # Text and line art need a stricter target than SSIM's raw number suggests.
+    effective_target = target_ssim
+    if content_class == "flat" and not lossless and max_size is None:
+        effective_target = max(target_ssim, FLAT_TARGET_SSIM)
+
     usable = available_formats()
     if formats is not None:
         usable = usable & set(formats)
@@ -470,14 +487,14 @@ def recommend(
         else:
             # The cheap probe narrows the bracket; the full image decides. A
             # probe that finds nothing means "start low", not "give up".
-            hint = _search_quality(probe, fmt, target_ssim)
+            hint = _search_quality(probe, fmt, effective_target)
             lo = max(_Q_MIN, hint - 8) if hint is not None else _Q_MIN
-            found, seen = _search_quality_full(img, fmt, target_ssim, lo=lo)
+            found, seen = _search_quality_full(img, fmt, effective_target, lo=lo)
             if seen is not None:
                 best_attempted = seen if best_attempted is None else max(best_attempted, seen)
             if found is None:
                 report_progress(int(step / total_steps * 100),
-                                f"{fmt}: cannot reach SSIM {target_ssim}")
+                                f"{fmt}: cannot reach SSIM {effective_target}")
                 continue
             quality, data, score = found
 
@@ -491,7 +508,7 @@ def recommend(
     elif lossless:
         viable = candidates
     else:
-        viable = [c for c in candidates if c.ssim >= target_ssim]
+        viable = [c for c in candidates if c.ssim >= effective_target]
 
     if not viable:
         if max_size is not None:
@@ -519,7 +536,7 @@ def recommend(
         content_class=content_class,
         candidates=viable,
         winner=winner,
-        target_ssim=None if (lossless or max_size) else target_ssim,
+        target_ssim=None if (lossless or max_size) else effective_target,
         max_size=max_size,
     )
 

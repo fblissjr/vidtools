@@ -358,3 +358,37 @@ def test_unreachable_target_reports_what_was_achievable(tmp_path):
     Image.fromarray(noise).save(src)
     with pytest.raises(ValueError, match=r"best achievable was SSIM 0\.\d+"):
         recommend(str(src), target_ssim=0.9999)
+
+
+def test_flat_content_gets_a_stricter_target_than_photographs(tmp_path):
+    """SSIM's scale is compressed on hard edges, so 0.98 is too loose for text.
+
+    Measured on a real 1979x1307 terminal screenshot: WebP q25 scored 0.9898
+    with visibly mushy, ringing glyphs, while q60 -- clearly legible -- scored
+    only 0.9951. The whole bad-to-fine range spans 0.005, so a 0.98 target lets
+    the search bottom out at the lowest quality it is permitted to try.
+    """
+    from vidtools.compress import FLAT_TARGET_SSIM
+
+    # Hard-edged, few-colour content: the classifier must see this as flat.
+    arr = np.full((600, 600, 3), 255, np.uint8)
+    for i in range(0, 600, 12):
+        arr[i:i + 5, :] = (0, 0, 0)
+        arr[:, i:i + 3] = (20, 20, 160)
+    src = tmp_path / "edges.png"
+    Image.fromarray(arr).save(src)
+
+    assert _classify_content(Image.open(src).convert("RGB")) == "flat", "fixture is not flat"
+
+    report = recommend(str(src), target_ssim=0.98)
+    assert report.winner.ssim >= FLAT_TARGET_SSIM, (
+        f"flat content accepted SSIM {report.winner.ssim:.4f}; the floor for "
+        f"text and line art is {FLAT_TARGET_SSIM}"
+    )
+
+
+def test_photographic_content_keeps_the_requested_target(photo_png):
+    """The stricter floor must not silently apply to photographs."""
+    report = recommend(photo_png, target_ssim=0.98)
+    assert report.content_class == "photographic"
+    assert 0.98 <= report.winner.ssim < 0.995 or report.winner.lossless

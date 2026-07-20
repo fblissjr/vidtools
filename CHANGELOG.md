@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.19.0
+
+### Fixed
+- **Text and UI screenshots are no longer compressed into mush.** Flat content (text, line art, UI chrome) now targets SSIM 0.995 rather than the 0.98 default.
+  - SSIM's scale is compressed on hard edges, so the usual target let the search bottom out at the lowest quality it was permitted to try. Measured on a real 1979x1307 terminal screenshot: WebP q25 scored **0.9898** with visibly ringing, mushy glyphs, while q60 — clearly legible — scored only **0.9951**. The entire bad-to-fine range spans 0.005, well inside what a 0.98 target treats as acceptable.
+  - Across eight real screenshots the selected quality moved from q25/q30/q35 to q58–q84. Files grew modestly (e.g. 18K to 32K) while reductions stayed at 6.5x–25.6x.
+  - This is a stopgap keyed to the content classifier, not a fix for the metric. A metric that actually sees edge ringing is the real answer; screenshots the classifier reads as photographic still get the looser target.
+
 ## 0.18.1
 
 ### Fixed
