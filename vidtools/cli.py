@@ -6,6 +6,7 @@ from .utils import (
     is_valid_file, check_ffmpeg_installed, VIDEO_EXTS, AUDIO_EXTS, IMAGE_EXTS,
 )
 from . import operations
+from .compress import DEFAULT_TARGET_SSIM, compress_image
 from . import image_ops
 from . import audio_ops
 from . import presets
@@ -32,6 +33,9 @@ def _detect_kind(path: str) -> str:
         f"image: {', '.join(sorted(IMAGE_EXTS))}."
     )
 
+
+#: Verbs whose media kind is decided by the input file, not the verb.
+_SMART_COMMANDS = frozenset({"info", "convert", "resize", "crop", "trim", "cut", "rotate"})
 
 # Verbs that have a media-specific alternative when the input kind isn't supported.
 _SMART_HINTS = {
@@ -83,6 +87,46 @@ def _add_io(parser, input_help="Input file", output_help="Output file"):
     """Add the standard `input` + `output` positionals."""
     parser.add_argument("input", type=lambda x: is_valid_file(parser, x), help=input_help)
     parser.add_argument("output", help=output_help)
+
+
+def _parse_size(value: str) -> int:
+    """Parse a byte budget like '500k', '2M', or a bare '512000'."""
+    text = value.strip().lower().rstrip("b")
+    multipliers = {"k": 1024, "m": 1024**2, "g": 1024**3}
+    multiplier = multipliers.get(text[-1:], 1)
+    if multiplier != 1:
+        text = text[:-1]
+    try:
+        size = int(float(text) * multiplier)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Invalid size: '{value}'. Use e.g. 500k, 2M, 512000") from None
+    if size <= 0:
+        raise argparse.ArgumentTypeError(f"Size must be positive, got '{value}'")
+    return size
+
+
+def _add_preserve_metadata(parser):
+    """Add `--preserve-metadata` (default off).
+
+    Identifying metadata -- GPS, camera make/model, capture time -- is stripped
+    by default. These verbs write a *new* file, so the original keeps
+    everything, while a leaked location does not come back.
+
+    Rendering data survives either way: image orientation is baked into pixels
+    and the colour profile is carried through; video keeps its display matrix
+    (on a stream copy) or has the rotation baked in by the re-encode.
+
+    Granularity differs by medium, because the underlying tools differ. For
+    images the kept set is an allowlist, so `--preserve-metadata` restores
+    authorship tags (copyright, artist, description) without re-admitting GPS.
+    For video, ffmpeg's `-map_metadata` is all-or-nothing at the container
+    level, so the flag keeps *everything* -- including location.
+    """
+    parser.add_argument(
+        "--preserve-metadata", action="store_true",
+        help="Keep source metadata. Images: authorship tags only, never GPS. "
+             "Video: all container tags, including GPS. Off by default.")
 
 
 def _add_time_range(parser):
@@ -176,6 +220,7 @@ Examples:
     convert.add_argument("--copy", action="store_true", help="Stream-copy where possible (no re-encode)")
     convert.add_argument("--hwaccel", action="store_true", help="Hardware acceleration (macOS VideoToolbox)")
     _add_time_range(convert)
+    _add_preserve_metadata(convert)
     _add_io(convert)
     def _convert_video(args):
         fmt = args.format or Path(args.output).suffix.lstrip(".")
@@ -187,15 +232,18 @@ Examples:
             video_codec=args.video_codec, audio_codec=args.audio_codec,
             video_bitrate=args.video_bitrate, audio_bitrate=args.bitrate,
             quality_scale=crf, start_time=args.start_time, end_time=args.end_time,
-            duration=args.duration, preset=args.preset, use_copy=args.copy, hwaccel=args.hwaccel)
+            duration=args.duration, preset=args.preset, use_copy=args.copy, hwaccel=args.hwaccel,
+            preserve_metadata=args.preserve_metadata)
     def _convert_image(args):
         image_ops.convert_image(args.input, args.output,
-                                quality=args.quality if args.quality is not None else 85)
+                                quality=args.quality if args.quality is not None else 85,
+                                preserve_metadata=args.preserve_metadata)
     def _convert_audio(args):
         bitrate = args.bitrate
         if bitrate is None and args.quality is not None:
             bitrate = _quality_to_audio_bitrate(args.quality)
-        audio_ops.convert_audio(args.input, args.output, audio_codec=args.audio_codec, bitrate=bitrate)
+        audio_ops.convert_audio(args.input, args.output, audio_codec=args.audio_codec,
+                                bitrate=bitrate, preserve_metadata=args.preserve_metadata)
     def _convert_dispatch(args):
         # An audio-only OUTPUT extracts/encodes audio regardless of input kind,
         # so --quality maps to bitrate (not video CRF) on that path. Otherwise
@@ -222,13 +270,16 @@ Examples:
                  "area", "bicubiclina", "gauss", "sinc", "lanczos", "spline"],
         help="Scaling algorithm (default: lanczos)",
     )
+    _add_preserve_metadata(resize)
     _add_io(resize)
     def _resize_video(args):
         operations.resize_video(args.input, args.output, percentage=args.percentage,
-                                width=args.width, height=args.height, algorithm=args.algorithm)
+                                width=args.width, height=args.height, algorithm=args.algorithm,
+                                preserve_metadata=args.preserve_metadata)
     def _resize_image(args):
         image_ops.resize_image(args.input, args.output, percentage=args.percentage,
-                               width=args.width, height=args.height)
+                               width=args.width, height=args.height,
+                               preserve_metadata=args.preserve_metadata)
     resize.set_defaults(func=_make_smart("resize", video=_resize_video, image=_resize_image))
 
     # ---------------------------------------------------------------- crop ----
@@ -240,11 +291,14 @@ Examples:
     crop.add_argument("-H", "--height", type=int, required=True, help="Crop height")
     crop.add_argument("-x", type=int, default=0, help="X offset (default: 0)")
     crop.add_argument("-y", type=int, default=0, help="Y offset (default: 0)")
+    _add_preserve_metadata(crop)
     _add_io(crop)
     def _crop_video(args):
-        operations.crop_video(args.input, args.output, args.width, args.height, args.x, args.y)
+        operations.crop_video(args.input, args.output, args.width, args.height, args.x, args.y,
+                              preserve_metadata=args.preserve_metadata)
     def _crop_image(args):
-        image_ops.crop_image(args.input, args.output, args.width, args.height, args.x, args.y)
+        image_ops.crop_image(args.input, args.output, args.width, args.height, args.x, args.y,
+                             preserve_metadata=args.preserve_metadata)
     crop.set_defaults(func=_make_smart("crop", video=_crop_video, image=_crop_image))
 
     # ---------------------------------------------------------------- trim ----
@@ -265,6 +319,7 @@ Examples:
 Time formats: HH:MM:SS.mmm, seconds (66.5), or MM:SS"""
     )
     _add_time_range(trim)
+    _add_preserve_metadata(trim)
     trim.add_argument("--accurate", action="store_true",
                       help="Frame-accurate (re-encodes, slower; video only)")
     trim.add_argument("--fast-seek", action="store_true",
@@ -280,10 +335,12 @@ Time formats: HH:MM:SS.mmm, seconds (66.5), or MM:SS"""
                              end_time=args.end_time, duration=args.duration,
                              use_copy=not args.accurate, fast_seek=args.fast_seek,
                              fix_sync=args.fix_sync, video_codec=args.video_codec,
-                             audio_codec=args.audio_codec, crf=args.crf, hwaccel=args.hwaccel)
+                             audio_codec=args.audio_codec, crf=args.crf, hwaccel=args.hwaccel,
+                             preserve_metadata=args.preserve_metadata)
     def _trim_audio(args):
         audio_ops.cut_audio(args.input, args.output, start_time=args.start_time,
-                            end_time=args.end_time, duration=args.duration)
+                            end_time=args.end_time, duration=args.duration,
+                            preserve_metadata=args.preserve_metadata)
     trim.set_defaults(func=_make_smart("trim", video=_trim_video, audio=_trim_audio))
 
     # ---------------------------------------------------------------- rotate --
@@ -293,15 +350,18 @@ Time formats: HH:MM:SS.mmm, seconds (66.5), or MM:SS"""
     )
     rotate.add_argument("-r", "--rotation", required=True,
                         help="Degrees. Video: 90/180/270/-90. Image: any angle (clockwise).")
+    _add_preserve_metadata(rotate)
     _add_io(rotate)
     def _rotate_video(args):
-        operations.rotate_video(args.input, args.output, args.rotation)
+        operations.rotate_video(args.input, args.output, args.rotation,
+                                preserve_metadata=args.preserve_metadata)
     def _rotate_image(args):
         try:
             angle = float(args.rotation)
         except ValueError:
             raise ValueError(f"Invalid rotation {args.rotation!r}: expected a number of degrees")
-        image_ops.adjust_image(args.input, args.output, rotation=angle)
+        image_ops.adjust_image(args.input, args.output, rotation=angle,
+                               preserve_metadata=args.preserve_metadata)
     rotate.set_defaults(func=_make_smart("rotate", video=_rotate_video, image=_rotate_image))
 
     # ═══════════════════════════════════════════════════════ VIDEO-ONLY ══════
@@ -407,8 +467,10 @@ For stream-copy mode, all inputs must share codec parameters."""
     concat.add_argument("-o", "--output", required=True, help="Output file")
     concat.add_argument("--reencode", action="store_true",
                         help="Re-encode (slower, handles different codecs)")
+    _add_preserve_metadata(concat)
     def _concat(args):
-        operations.concatenate_videos(args.inputs, args.output, use_copy=not args.reencode)
+        operations.concatenate_videos(args.inputs, args.output, use_copy=not args.reencode,
+                                      preserve_metadata=args.preserve_metadata)
     concat.set_defaults(func=_concat)
 
     # ---------------------------------------------------------------- subtitles
@@ -419,9 +481,11 @@ For stream-copy mode, all inputs must share codec parameters."""
     subtitles.add_argument("-s", "--subs", required=True,
                            type=lambda x: is_valid_file(subtitles, x),
                            help="Subtitle file (.srt, .ass, ...)")
+    _add_preserve_metadata(subtitles)
     _add_io(subtitles, "Input video")
     def _subtitles(args):
-        operations.add_subtitles(args.input, args.output, args.subs)
+        operations.add_subtitles(args.input, args.output, args.subs,
+                                 preserve_metadata=args.preserve_metadata)
     subtitles.set_defaults(func=_subtitles)
 
     # ---------------------------------------------------------------- add-audio
@@ -444,10 +508,12 @@ Examples:
                                   help="Input video file")
     add_audio_parser.add_argument("audio", type=lambda x: is_valid_file(add_audio_parser, x),
                                   help="Audio file to add")
+    _add_preserve_metadata(add_audio_parser)
     add_audio_parser.add_argument("output", help="Output video file")
     def _add_audio(args):
         operations.add_audio(args.input, args.audio, args.output,
-                             mode="mix" if args.mix else "replace", volume=args.volume)
+                             mode="mix" if args.mix else "replace", volume=args.volume,
+                             preserve_metadata=args.preserve_metadata)
     add_audio_parser.set_defaults(func=_add_audio)
 
     # ---------------------------------------------------------------- match-duration
@@ -473,11 +539,13 @@ Examples:
     match_duration.add_argument("--crf", type=int, help="CRF quality (0-51) for re-encode")
     match_duration.add_argument("--hwaccel", action="store_true",
                                 help="Hardware acceleration (macOS VideoToolbox)")
+    _add_preserve_metadata(match_duration)
     _add_io(match_duration, "Input video")
     def _match_duration(args):
         operations.trim_to_audio(args.input, args.output, buffer=args.buffer,
                                  accurate=args.accurate, video_codec=args.video_codec,
-                                 audio_codec=args.audio_codec, crf=args.crf, hwaccel=args.hwaccel)
+                                 audio_codec=args.audio_codec, crf=args.crf, hwaccel=args.hwaccel,
+                                 preserve_metadata=args.preserve_metadata)
     match_duration.set_defaults(func=_match_duration)
 
     # ---------------------------------------------------------------- slideshow
@@ -530,9 +598,11 @@ Examples:
     normalize = subparsers.add_parser("normalize", help="Normalize loudness (two-pass LUFS); audio or video",
                                       formatter_class=argparse.RawTextHelpFormatter)
     normalize.add_argument("--target", type=float, default=-16.0, help="Target LUFS (default: -16)")
+    _add_preserve_metadata(normalize)
     _add_io(normalize, "Input audio or video")
     def _normalize(args, in_path, out_path):
-        audio_ops.normalize_audio(in_path, out_path, target_loudness=args.target)
+        audio_ops.normalize_audio(in_path, out_path, target_loudness=args.target,
+                                  preserve_metadata=args.preserve_metadata)
     normalize.set_defaults(func=_audio_verb(_normalize))
 
     # ---------------------------------------------------------------- fade
@@ -541,19 +611,23 @@ Examples:
     fade.add_argument("--fade-in", type=float, help="Fade-in duration (seconds)")
     fade.add_argument("--fade-out", type=float, help="Fade-out duration (seconds)")
     fade.add_argument("--total-duration", type=float, help="Total duration (required for fade-out)")
+    _add_preserve_metadata(fade)
     _add_io(fade, "Input audio or video")
     def _fade(args, in_path, out_path):
         audio_ops.fade_audio(in_path, out_path, fade_in=args.fade_in,
-                             fade_out=args.fade_out, total_duration=args.total_duration)
+                             fade_out=args.fade_out, total_duration=args.total_duration,
+                             preserve_metadata=args.preserve_metadata)
     fade.set_defaults(func=_audio_verb(_fade))
 
     # ---------------------------------------------------------------- resample
     resample = subparsers.add_parser("resample", help="Resample audio (change sample rate); audio or video",
                                      formatter_class=argparse.RawTextHelpFormatter)
     resample.add_argument("-r", "--rate", type=int, default=44100, help="Sample rate Hz (default: 44100)")
+    _add_preserve_metadata(resample)
     _add_io(resample, "Input audio or video")
     def _resample(args, in_path, out_path):
-        audio_ops.resample_audio(in_path, out_path, sample_rate=args.rate)
+        audio_ops.resample_audio(in_path, out_path, sample_rate=args.rate,
+                                 preserve_metadata=args.preserve_metadata)
     resample.set_defaults(func=_audio_verb(_resample))
 
     # ---------------------------------------------------------------- clean
@@ -590,6 +664,7 @@ Examples:
     clean.add_argument("--lra", type=float, default=11.0, help="Loudness range target (default: 11)")
     clean.add_argument("--audio-codec", dest="audio_codec", help="Audio codec (auto-detected from extension)")
     clean.add_argument("--bitrate", help="Bitrate (e.g. 320k); overrides default VBR for mp3")
+    _add_preserve_metadata(clean)
     _add_io(clean, "Input audio or video")
     def _clean(args, in_path, out_path):
         highpass = None if args.no_highpass or args.highpass == 0 else args.highpass
@@ -600,6 +675,7 @@ Examples:
             compress_ratio=args.ratio, compress_attack=args.attack, compress_release=args.release,
             loudnorm=not args.no_loudnorm, target_lufs=args.lufs, true_peak=args.true_peak,
             lra=args.lra, audio_codec=args.audio_codec, bitrate=args.bitrate,
+            preserve_metadata=args.preserve_metadata,
         )
     clean.set_defaults(func=_audio_verb(_clean))
 
@@ -644,9 +720,11 @@ Examples:
     thumbnail = subparsers.add_parser("thumbnail", help="Create an aspect-preserving image thumbnail",
                                       formatter_class=argparse.RawTextHelpFormatter)
     thumbnail.add_argument("-s", "--size", type=int, default=256, help="Max dimension (default: 256)")
+    _add_preserve_metadata(thumbnail)
     _add_io(thumbnail, "Input image")
     def _thumbnail(args):
-        image_ops.create_thumbnail(args.input, args.output, size=args.size)
+        image_ops.create_thumbnail(args.input, args.output, size=args.size,
+                                   preserve_metadata=args.preserve_metadata)
     thumbnail.set_defaults(func=_thumbnail)
 
     # ---------------------------------------------------------------- strip-metadata
@@ -663,11 +741,60 @@ Examples:
     optimize.add_argument("-q", "--quality", type=int, default=80, help="Quality 1-100 (default: 80)")
     optimize.add_argument("--max-width", type=int, help="Max width")
     optimize.add_argument("--max-height", type=int, help="Max height")
+    _add_preserve_metadata(optimize)
     _add_io(optimize, "Input image")
     def _optimize(args):
         image_ops.optimize_image(args.input, args.output, quality=args.quality,
-                                 max_width=args.max_width, max_height=args.max_height)
+                                 max_width=args.max_width, max_height=args.max_height,
+                                 preserve_metadata=args.preserve_metadata)
     optimize.set_defaults(func=_optimize)
+
+    # ---------------------------------------------------------------- compress
+    compress_p = subparsers.add_parser(
+        "compress",
+        help="Shrink an image, picking the format automatically",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description="""Measure candidate encodings and write the smallest one that
+meets a fidelity target.
+
+Unlike `optimize` (which recompresses into the format you name), `compress`
+searches formats and qualities, scores each against the original, and reports
+what it found. Defaults to PNG/JPEG/WebP -- the formats the Claude and Gemini
+vision APIs accept. AVIF usually compresses far better but no major vision API
+decodes it, so it is opt-in via --allow-avif.""",
+    )
+    compress_p.add_argument("input", type=lambda x: is_valid_file(compress_p, x), help="Input image")
+    compress_p.add_argument("output", nargs="?",
+                          help="Output path. Omit the extension to let the winning format "
+                               "supply one; omit entirely for <input>_compressed.<ext>")
+    compress_p.add_argument("--target-ssim", type=float, default=DEFAULT_TARGET_SSIM,
+                          help=f"Fidelity target 0-1 (default: {DEFAULT_TARGET_SSIM})")
+    compress_p.add_argument("--lossless", action="store_true",
+                          help="Only exact encodes (SSIM 1.0); smallest wins")
+    compress_p.add_argument("--max-size", type=_parse_size,
+                          help="Byte budget (e.g. 500k, 2M). Maximises fidelity within it")
+    compress_p.add_argument("--allow-avif", action="store_true",
+                          help="Allow AVIF. Compresses best, but Claude/Gemini cannot read it")
+    compress_p.add_argument("--dry-run", action="store_true",
+                          help="Report the ranked candidates without writing a file")
+
+    def _compress(args):
+        report = compress_image(
+            args.input, args.output,
+            target_ssim=args.target_ssim, lossless=args.lossless,
+            max_size=args.max_size, allow_avif=args.allow_avif, dry_run=args.dry_run,
+        )
+        src_mb = report.source_size / 1048576
+        print(f"{report.width}x{report.height} {report.content_class}, {src_mb:.2f} MB")
+        for cand in report.candidates:
+            marker = "->" if cand is report.winner else "  "
+            print(f" {marker} {cand.label():18} {cand.size / 1048576:7.2f} MB"
+                  f"  {cand.ratio(report.source_size):5.1f}x smaller  SSIM {cand.ssim:.6f}")
+        if report.output_path:
+            print(f"wrote {report.output_path}")
+        elif args.dry_run:
+            print("(dry run -- nothing written)")
+    compress_p.set_defaults(func=_compress)
 
     # ---------------------------------------------------------------- adjust
     adjust = subparsers.add_parser("adjust", help="Adjust image brightness/contrast/rotation/flip",
@@ -676,10 +803,14 @@ Examples:
     adjust.add_argument("--contrast", type=float, help="Contrast factor (1.0 = no change)")
     adjust.add_argument("--rotation", type=int, help="Rotation in degrees (clockwise)")
     adjust.add_argument("--flip", choices=["horizontal", "vertical"], help="Flip direction")
+    adjust.add_argument("--fill", help="Corner fill for non-right-angle rotation "
+                                        "(colour name or #rrggbb; default transparent)")
+    _add_preserve_metadata(adjust)
     _add_io(adjust, "Input image")
     def _adjust(args):
         image_ops.adjust_image(args.input, args.output, brightness=args.brightness,
-                               contrast=args.contrast, rotation=args.rotation, flip=args.flip)
+                               contrast=args.contrast, rotation=args.rotation, flip=args.flip,
+                               fill=args.fill, preserve_metadata=args.preserve_metadata)
     adjust.set_defaults(func=_adjust)
 
     # ══════════════════════════════════════════════════════════════ META ═════
@@ -760,6 +891,7 @@ NOT supported: concat, slideshow, extract-*, add-audio, preset.
 Step order is preserved in the filter chain. trim input args are pulled before
 the input file regardless of position. convert is always terminal."""
     )
+    _add_preserve_metadata(pipeline)
     pipeline.add_argument("input", help="Input video file")
     pipeline.add_argument("output", help="Output video file")
     pipeline.add_argument("steps", nargs=argparse.REMAINDER,
@@ -771,7 +903,8 @@ the input file regardless of position. convert is always terminal."""
             raise SystemExit("pipeline requires at least one step")
         if _detect_kind(args.input) != "video":
             raise SystemExit("pipeline only supports video inputs in v1")
-        Pipeline(args.input, args.output, steps).run()
+        Pipeline(args.input, args.output, steps,
+                 preserve_metadata=args.preserve_metadata).run()
     pipeline.set_defaults(func=_pipeline)
 
     # ==========================================================================
@@ -892,13 +1025,44 @@ def handle_command(args: argparse.Namespace) -> None:
         _parser.print_help()
 
 
+#: Verbs implemented entirely in PIL. These must stay usable on a machine with
+#: no ffmpeg installed -- requiring the whole toolchain to resize a PNG is a
+#: needless barrier, and it also forced the image tests behind an ffmpeg gate,
+#: which is how a family of image-metadata defects went unnoticed.
+_PIL_ONLY_COMMANDS = frozenset({
+    "compress", "optimize", "thumbnail", "strip-metadata", "adjust",
+})
+
+
+def _needs_ffmpeg(args: argparse.Namespace) -> bool:
+    """Whether this invocation actually requires the ffmpeg toolchain.
+
+    Multi-media verbs (`info`, `convert`, `resize`, `crop`, `rotate`) depend on
+    the input: an image goes through PIL, anything else through ffmpeg.
+    """
+    command = getattr(args, "command", None)
+    if command in _PIL_ONLY_COMMANDS:
+        return False
+    source = getattr(args, "input", None)
+    if command in _SMART_COMMANDS and isinstance(source, str):
+        try:
+            return _detect_kind(source) != "image"
+        except SystemExit:
+            return True  # unknown kind: let the normal error path report it
+    return True
+
+
 def main():
     """Main entry point for the CLI."""
     from .progress import FfmpegError
-    if not check_ffmpeg_installed():
+    try:
+        args = parse_arguments()
+    except SystemExit:
+        raise
+    if _needs_ffmpeg(args) and not check_ffmpeg_installed():
         sys.exit("Error: ffmpeg not found in PATH. Please install ffmpeg first.")
     try:
-        handle_command(parse_arguments())
+        handle_command(args)
     except (FfmpegError, ValueError) as e:
         # ValueError covers operation-level validation (bad rotation/crop
         # geometry, missing fade args, non-integer rotate angle, etc.) so the

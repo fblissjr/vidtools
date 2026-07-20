@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from .utils import run_ffmpeg
 from .video_ops import (
     _add_faststart_if_mp4,
+    _add_metadata_policy,
     _build_scale_filter,
     _build_transpose_filter,
     _escape_subtitle_path,
@@ -54,10 +55,12 @@ class Pipeline:
     - output_args: things after -i (e.g. -t/-to for cut, -c:v / -crf for convert)
     """
 
-    def __init__(self, input_file: str, output_file: str, steps: list[PipelineStep]):
+    def __init__(self, input_file: str, output_file: str, steps: list[PipelineStep],
+                 preserve_metadata: bool = False):
         self.input_file = input_file
         self.output_file = output_file
         self.steps = steps
+        self.preserve_metadata = preserve_metadata
         self._validate()
 
     def _validate(self) -> None:
@@ -125,6 +128,12 @@ class Pipeline:
             # Filters require re-encoding -- supply sane defaults
             cmd.extend(["-c:v", "libx264", "-crf", "23", "-c:a", "copy"])
 
+        # A pipeline runs the same operations as the individual verbs, so it must
+        # apply the same metadata policy. Without this a pipeline carried the
+        # source's GPS and camera tags straight through while `vidtools resize`
+        # on the same file stripped them -- the leak the policy exists to close,
+        # reachable by the route a user takes to avoid re-encoding.
+        _add_metadata_policy(cmd, self.preserve_metadata)
         _add_faststart_if_mp4(cmd, self.output_file)
         cmd.append(self.output_file)
         return cmd

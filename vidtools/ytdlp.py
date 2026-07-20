@@ -28,7 +28,7 @@ _LIVE_SEG_NUM_RE = re.compile(r"seg[_-]?(\d+)")
 _LIVE_WAIT_RE = re.compile(r"\[wait\] Waiting for video", re.IGNORECASE)
 
 # Report progress every Nth fragment so a multi-hour stream doesn't fan out
-# thousands of WebSocket broadcasts. Fragment 1 always reports (state change).
+# thousands of progress events. Fragment 1 always reports (state change).
 _LIVE_FRAGMENT_REPORT_EVERY = 5
 
 
@@ -221,7 +221,7 @@ def download_live(
     """Record a live broadcast (mp4 output). Reports progress via thread-local sink.
 
     Throttles fragment progress to one report per N fragments so a multi-hour
-    stream doesn't fan out thousands of WebSocket broadcasts. Returns the path
+    stream doesn't emit thousands of progress events. Returns the path
     to the recorded file. Raises RuntimeError on failure.
     """
     cmd = build_ytdlp_live_command(

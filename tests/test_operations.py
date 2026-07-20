@@ -542,3 +542,74 @@ class TestConvertFormatAudioOnly:
         cmd = capture_ffmpeg[0]
         assert "-c:v" in cmd
         assert "-vn" not in cmd
+
+
+class TestMetadataPolicyShape:
+    """Every op that writes a new file must apply the metadata policy.
+
+    The 0.20.0 default was rolled out op-by-op, and the first review of it found
+    two places the rollout had missed: three CLI verbs never exposed
+    `--preserve-metadata`, and `pipeline` never stripped at all. This asserts the
+    property across the whole set rather than per-op, so the next op added to
+    the family cannot quietly skip it.
+    """
+
+    @pytest.fixture
+    def capture(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr("vidtools.video_ops.run_ffmpeg", lambda cmd: calls.append(cmd))
+        return calls
+
+    def _run(self, name, tmp_path):
+        out = str(tmp_path / "out.mp4")
+        src = str(tmp_path / "in.mp4")
+        Path(src).write_bytes(b"")
+        from vidtools import operations
+        return {
+            "cut_video": lambda kw: operations.cut_video(src, out, start_time=0, end_time=1, **kw),
+            "resize_video": lambda kw: operations.resize_video(src, out, percentage=0.5, **kw),
+            "crop_video": lambda kw: operations.crop_video(src, out, 10, 10, 0, 0, **kw),
+            "rotate_video": lambda kw: operations.rotate_video(src, out, 90, **kw),
+            "concatenate_videos": lambda kw: operations.concatenate_videos([src, src], out, **kw),
+            "add_audio": lambda kw: operations.add_audio(src, src, out, **kw),
+        }[name]
+
+    @pytest.mark.parametrize("op", [
+        "cut_video", "resize_video", "crop_video", "rotate_video",
+        "concatenate_videos", "add_audio",
+    ])
+    def test_strips_container_metadata_by_default(self, capture, tmp_path, op):
+        self._run(op, tmp_path)({})
+        cmd = capture[-1]
+        assert "-map_metadata" in cmd, f"{op} does not strip container metadata"
+        assert cmd[cmd.index("-map_metadata") + 1] == "-1"
+
+    @pytest.mark.parametrize("op", [
+        "cut_video", "resize_video", "crop_video", "rotate_video",
+        "concatenate_videos", "add_audio",
+    ])
+    def test_preserve_metadata_opts_back_in(self, capture, tmp_path, op):
+        self._run(op, tmp_path)({"preserve_metadata": True})
+        assert "-map_metadata" not in capture[-1], f"{op} strips even with preserve_metadata=True"
+
+
+class TestPipelineMetadataPolicy:
+    """A pipeline runs the same ops, so it must apply the same policy.
+
+    It previously did not: `vidtools pipeline in.mp4 out.mp4 trim ... resize ...`
+    carried the source's GPS through while `vidtools resize` on the same file
+    stripped it -- reachable by the route a user takes to avoid re-encoding.
+    """
+
+    def test_pipeline_strips_by_default(self):
+        from vidtools.pipeline import Pipeline, PipelineStep
+        cmd = Pipeline("in.mp4", "out.mp4",
+                       [PipelineStep("resize", {"percentage": 0.5})]).build_command()
+        assert "-map_metadata" in cmd and cmd[cmd.index("-map_metadata") + 1] == "-1"
+
+    def test_pipeline_preserve_metadata(self):
+        from vidtools.pipeline import Pipeline, PipelineStep
+        cmd = Pipeline("in.mp4", "out.mp4",
+                       [PipelineStep("resize", {"percentage": 0.5})],
+                       preserve_metadata=True).build_command()
+        assert "-map_metadata" not in cmd

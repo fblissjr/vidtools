@@ -1,28 +1,20 @@
 # vidtools
 
-Media tools wrapper with a web UI and CLI. Built because I always forget ffmpeg flags.
+Media tools CLI. Built because I always forget ffmpeg flags.
 
-Handles video (FFmpeg), images (PIL), and audio (FFmpeg). Two ways to use it:
-
-1. **Web UI** — mobile-first browser interface, designed so my wife can use it from her phone on our local network
-2. **CLI** — for when I'm at a terminal and know what I want
+Handles video (FFmpeg), images (PIL), and audio (FFmpeg).
 
 ## Quick start
 
-Requires Python 3.12+, ffmpeg ≥ 5.1 and ffprobe in PATH. yt-dlp in PATH for URL downloads.
+Requires Python 3.12+. Video and audio verbs need ffmpeg >= 5.1 and ffprobe in
+PATH; yt-dlp in PATH for URL downloads. The image verbs are pure PIL and run on
+a machine with no ffmpeg at all — the toolchain check is scoped to the
+invocations that actually need it.
 
 ```bash
-# Install
 uv sync
-
-# Start the web server (default: http://0.0.0.0:8910)
-uv run uvicorn vidtools.server:app --host 0.0.0.0 --port 8910
-
-# Or use the CLI directly
 uv run vidtools <command> [options]
 ```
-
-On first visit to the web UI, you'll set a password. After that, all access requires login. Files and jobs persist in SQLite (`data/vidtools.db`) and survive restarts.
 
 ## CLI
 
@@ -72,9 +64,39 @@ vidtools thumbnail -s 256 in.png thumb.png
 vidtools strip-metadata in.jpg clean.jpg
 vidtools optimize -q 80 --max-width 1920 in.png small.jpg
 vidtools adjust --brightness 1.2 --contrast 1.1 --rotation 90 --flip horizontal in.png out.png
+vidtools adjust --rotation 45 --fill white in.png out.png   # corner fill for off-axis rotation
 ```
 
+`--fill` sets the colour of the corners a non-right-angle rotation exposes
+(colour name or `#rrggbb`; transparent by default).
+
 (For image resize/convert/crop/rotate/info, use the universal verbs above.)
+
+#### compress — shrink an image without guessing
+
+`optimize` recompresses into the format you name. `compress` picks the format
+*and* the quality by measuring: it encodes candidates, scores each against the
+original with SSIM, and writes the smallest one that clears a fidelity target.
+
+```bash
+vidtools compress photo.jpg                          # -> photo_compressed.<winning ext>
+vidtools compress photo.jpg small                    # winner supplies the extension
+vidtools compress photo.jpg out.webp                 # or name the format yourself
+vidtools compress photo.jpg --dry-run                # rank candidates, write nothing
+vidtools compress photo.jpg --target-ssim 0.99       # fidelity target 0-1 (default 0.98)
+vidtools compress photo.jpg --max-size 500k          # byte budget; maximises fidelity within it
+vidtools compress logo.png --lossless                # exact encodes only, smallest wins
+vidtools compress photo.jpg --allow-avif             # opt into AVIF
+```
+
+Defaults to PNG/JPEG/WebP — the formats the Claude and Gemini vision APIs
+accept. AVIF usually compresses far better but no major vision API decodes it,
+so it is opt-in (naming a `.avif` output implies `--allow-avif`). Text and UI
+screenshots are detected and held to a stricter target, since SSIM barely
+registers the ringing that makes glyphs mushy.
+
+Pillow-only — no `cwebp`/`avifenc` subprocesses. A build without AVIF or WebP
+degrades to the formats it has rather than failing.
 
 ### Audio commands (FFmpeg)
 
@@ -117,6 +139,50 @@ vidtools pipeline in.mp4 out.mp4 \
 
 3-5x faster than running separate commands; no intermediate files; no compounding quality loss. Supports trim (alias cut), resize, crop, rotate, sanitize, subtitles, convert. Excludes multi-input or different-output ops (concat, slideshow, extract-*, add-audio, preset).
 
+### Metadata: what gets stripped
+
+**Identifying metadata is removed by default.** GPS coordinates, camera
+make/model and capture timestamps do not survive into output. Pass
+`--preserve-metadata` to keep them.
+
+Rendering data is always preserved: EXIF orientation (baked into the pixels on
+open, so the output is upright rather than tagged) and the ICC colour profile.
+Dropping those would change how the image looks, which is a pixel change in all
+but name.
+
+```bash
+vidtools resize phone-photo.jpg small.jpg                      # GPS gone
+vidtools resize phone-photo.jpg small.jpg --preserve-metadata  # GPS kept
+```
+
+The original file is untouched either way — these verbs write a new file. That
+asymmetry is the reason for the default: the original keeps everything, while a
+location you published by accident does not come back.
+
+Granularity differs by medium. For **images** the kept set is an allowlist
+(copyright, artist, description), so `--preserve-metadata` restores authorship
+without re-admitting GPS. For **video**, ffmpeg's metadata mapping is
+all-or-nothing at the container level, so the flag keeps everything, location
+included.
+
+Verbs that take `--preserve-metadata`: `convert`, `resize`, `crop`, `trim`,
+`rotate`, `concat`, `add-audio`, `match-duration`, `thumbnail`, `optimize`,
+`adjust`, `pipeline`, `subtitles`, `normalize`, `fade`, `resample`, `clean`.
+`sanitize` and `strip-metadata` always strip — that is their job.
+
+**Audio inverts the default, on purpose.** For a photo or a clip, metadata is
+incidental. For audio it is frequently the point: artist, title and album are
+what make a library work, and `convert song.mp3 song.m4a` handing back an
+untitled file would be a worse bug than the leak. So audio **keeps** the
+descriptive tags (artist, title, album, track, genre, date) and **drops** the
+free-form and recorder ones (`comment`, `description`, `encoded_by`, `location`,
+`make`, `model`). `comment` is the one that matters — it is where an entire
+generation prompt turned up in the video case.
+
+**Not yet covered.** The policy does not reach everything:
+
+- `extract-audio`, `extract-frames` and `slideshow` still carry source metadata.
+
 ### Presets
 
 ```bash
@@ -154,75 +220,22 @@ uv --project /path/to/vidtools run yt-dlp \
   "<live broadcast url>"
 ```
 
-## Web UI
-
-The server exposes a mobile-first interface with three tabs:
-
-- **External Download** — paste an HTTPS URL, pick MP3/WAV/MP4, download via yt-dlp
-- **Process File** — upload a file, pick an operation, run it
-- **My Files** — browse uploaded and output files, download or delete
-
-Real-time progress via WebSocket. Jobs run in background workers (default 2 concurrent) and persist across server restarts. Interrupted jobs are auto-marked FAILED on next startup.
-
-### Environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `VIDTOOLS_DATA_DIR` | `./data` | Where uploads, output, temp files, and SQLite DB live |
-| `VIDTOOLS_CONFIG_DIR` | `~/.config/vidtools` | Password hash and config storage |
-| `VIDTOOLS_MAX_UPLOAD_MB` | `2048` | Max upload size in MB |
-| `VIDTOOLS_CLEANUP_HOURS` | `24` | Auto-delete output files after this many hours |
-
-### API endpoints
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| GET | `/` | No | Serve web UI |
-| GET | `/api/status` | No | Health check, auth status, version |
-| POST | `/api/setup` | No | First-time password setup |
-| POST | `/api/login` | Rate-limited | Authenticate, get session cookie |
-| POST | `/api/logout` | Yes | Clear session |
-| POST | `/api/upload` | Yes | Upload a file |
-| GET | `/api/files` | Yes | List all files |
-| GET | `/api/files/{id}/download` | Yes | Download a file |
-| DELETE | `/api/files/{id}` | Yes | Delete a file |
-| POST | `/api/jobs` | Yes | Create a job (ffmpeg op or yt-dlp download) |
-| GET | `/api/jobs` | Yes | List all jobs |
-| GET | `/api/jobs/{id}` | Yes | Get job status |
-| DELETE | `/api/jobs/{id}` | Yes | Cancel a job |
-| GET | `/api/presets` | Yes | List available presets |
-| WS | `/ws/progress` | Cookie | Real-time job progress updates |
-
-## Deployment
-
-For running as a service on Ubuntu (e.g., a local server on your network):
-
-```bash
-cd deploy
-sudo ./setup.sh
-```
-
-This creates a systemd service with security hardening (NoNewPrivileges, ProtectSystem=strict, PrivateTmp, etc.). See `deploy/vidtools.service` for the full unit file.
-
 ## Architecture
 
 Operations are split by media type and re-exported from a thin facade:
 
-- `video_ops.py` — FFmpeg video operations + shared filter helpers
-- `image_ops.py` — PIL image operations
-- `audio_ops.py` — FFmpeg audio operations
-- `operations.py` — facade (`from .video_ops import *` etc.)
+- `video_ops.py` -- FFmpeg video operations + shared filter helpers
+- `image_ops.py` -- PIL image operations
+- `audio_ops.py` -- FFmpeg audio operations
+- `compress.py` -- measured format/quality search (see `compress` above)
+- `operations.py` -- facade (`from .video_ops import *` etc.)
 
 Cross-cutting infrastructure:
 
-- `progress.py` — thread-local progress sink. Operations call `report_progress(percent, msg)`; CLI installs a tqdm sink, server installs a WebSocket-broadcasting sink. No callback parameters in operation signatures.
-- `db.py` — SQLite at `data/vidtools.db` (WAL mode). `FileRegistry` and `JobStore`. One-time migration from legacy `file_registry.json` runs on first startup.
-- `pipeline.py` — `Pipeline` class chains video ops into a single ffmpeg invocation with combined `-vf` filter chain.
-- `cli.py` — argparse + smart input-type dispatch (`_make_smart`, `_detect_kind`).
-- `server.py` — FastAPI + WebSocket. `_OP_DISPATCH` dict maps operation names to per-op handlers.
-- `jobs.py` — `JobManager` with asyncio.Semaphore concurrency cap and SQLite-backed persistence.
-- `security.py` — bcrypt + JWT + per-IP rate limiter.
-- `ytdlp.py` — yt-dlp subprocess wrapper.
+- `progress.py` -- thread-local progress sink. Operations call `report_progress(percent, msg)`; the CLI installs a tqdm sink. No callback parameters in operation signatures.
+- `pipeline.py` -- `Pipeline` class chains video ops into a single ffmpeg invocation with a combined `-vf` filter chain.
+- `cli.py` -- argparse + smart input-type dispatch (`_make_smart`, `_detect_kind`).
+- `ytdlp.py` -- yt-dlp subprocess wrapper.
 
 ## Project structure
 
@@ -235,24 +248,14 @@ vidtools/
   video_ops.py       # FFmpeg video ops + shared filter helpers
   image_ops.py       # PIL image ops
   audio_ops.py       # FFmpeg audio ops
+  compress.py        # measured format/quality search for images
   utils.py           # run_ffmpeg, ffmpeg version check, file validation
   progress.py        # thread-local progress sink + FfmpegError
-  db.py              # SQLite-backed FileRegistry and JobStore
   pipeline.py        # Pipeline chaining (single ffmpeg invocation)
-  jobs.py            # Job dataclass + JobManager (concurrency + persistence)
-  server.py          # FastAPI server, REST API, WebSocket
-  security.py        # bcrypt, JWT, rate limiting, URL validation
   ytdlp.py           # yt-dlp wrapper
   presets.py         # Preset management with mtime cache
-  web/
-    index.html       # Mobile-first UI, no build step
-    style.css        # Dark/light theme support
-    app.js           # Vanilla JS, manual DOM (no innerHTML)
-deploy/
-  setup.sh           # Ubuntu deployment script
-  vidtools.service   # systemd unit file (hardened)
-data/                # Uploads, output, temp, SQLite DB — gitignored except .gitkeep
-tests/               # 13 files, ~280 tests (run: uv run pytest tests/ -v)
+data/                # Output and temp files -- gitignored except .gitkeep
+tests/               # run: uv run pytest tests/ -v
 ```
 
 ## Tests
@@ -260,5 +263,3 @@ tests/               # 13 files, ~280 tests (run: uv run pytest tests/ -v)
 ```bash
 uv run pytest tests/ -v
 ```
-
-280 tests across security, jobs, operations, video/image/audio ops, ytdlp, server, dispatch, progress, db, pipeline, and separation.

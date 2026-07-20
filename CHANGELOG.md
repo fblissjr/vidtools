@@ -1,5 +1,155 @@
 # Changelog
 
+## 0.21.0
+
+### Added
+- **Audio metadata policy — and it deliberately inverts the image/video default.** Those strip everything because their metadata is incidental; for audio it is frequently the point. Artist, title and album are what make a library work, and `convert song.mp3 song.m4a` handing back an untitled file would be a worse bug than the leak. So the same three-category model applies with different membership: descriptive tags (artist, title, album, track, genre, date) are **kept**, free-form and recorder fields (`comment`, `description`, `encoded_by`, `location`, `make`, `model`) are **dropped**. `comment` is the field that held 109 KB of generation prompt in the video case. `--preserve-metadata` keeps everything.
+  - Applies to `convert`, `trim`, `normalize`, `fade`, `resample`, `clean`, `mix` and `remove-silence`. Verified: every audio op previously carried artist, title, comment, album and date straight through.
+
+### Fixed
+- **`compress` no longer renders portrait photos sideways or drops colour profiles.** It opened images with a bare `Image.open` rather than the shared imaging core, so it skipped EXIF orientation and the ICC profile — reintroducing, through a second open path, exactly the defects 0.17.0 fixed in `image_ops`. Confirmed against a phone photo: a portrait source came out displaying landscape.
+- `subtitles` exposes `--preserve-metadata`; it applied the policy but offered no way to opt back in.
+- Raised the `Pillow` floor from `>=9.0.0` to `>=11.3.0`. The old floor would crash: `Image.Resampling`/`Image.Palette` need 9.1, and `compress` probes `features.check("avif")`, which needs 11.3 for native AVIF.
+
+### Removed
+- `requirements.txt` — a legacy duplicate of the `pyproject.toml` dependency list, referenced nowhere and still carrying the stale Pillow floor. A second source of truth for dependencies is exactly the drift this release is cleaning up.
+
+### Docs
+- `CLAUDE.md` and `README.md` brought in line with the code: removed the deleted `deploy/` section and the web-op reference, added `compress.py` and the imaging core to the architecture, corrected the test-file inventory and documented the `ffmpeg`/`pil_real` markers, and documented the metadata policy across all three media types with its remaining gaps stated rather than glossed.
+- Corrected a CLAUDE.md claim that `pillow-heif` was a supported optional dependency. Pillow 12 does AVIF natively and nothing registers a HEIF opener, so installing it would enable nothing. HEIF is unsupported; the docs now say so.
+
+## 0.20.1
+
+All of the below were found by review of the 0.16.0-0.20.0 work and verified by execution before and after.
+
+### Fixed
+- **`strip-metadata` no longer re-quantizes JPEGs.** Pillow's encoder defaults to quality 75 when the caller omits `quality`, so stripping metadata from a quality-95 photo halved it — 119 KB to 57 KB, with 92% of pixels changed — while the docstring claimed it altered none. The source's quantization tables and subsampling are now carried across. A JPEG round-trip is still not bit-exact (it is a decode/encode, not a container edit) and the documentation now says so rather than overclaiming.
+- **Colour survives GIF output.** `.gif` declares modes `{L, P}` and no `RGB`, so the fallback order tried greyscale before palette and silently desaturated every colour image saved as `.gif`.
+- **Transparency flattens onto white, not black.** The composite step existed but was unreachable: the colour-mode conversion ran first and did a bare `convert("RGB")`, which discards alpha and exposes whatever sits underneath — (0,0,0) in real transparent PNGs. Affected `.jpg`, `.bmp` and `.gif` output.
+- **JPEG comment markers no longer leak.** Pillow reads `comment` from `im.info` when the caller supplies none, bypassing the EXIF allowlist entirely. Free-form text is the same payload class that appeared as 109 KB of generation prompt in video comment tags.
+- **`pipeline` applies the metadata policy.** It ran the same operations as the individual verbs but stripped nothing, so `vidtools pipeline in.mp4 out.mp4 trim ... resize ...` carried GPS through while `vidtools resize` on the same file removed it — reachable by the route a user takes to *avoid* re-encoding.
+- **`--preserve-metadata` reaches every verb that supports it.** `concat`, `add-audio`, `match-duration` and `pipeline` had the underlying parameter but never exposed the flag, so 0.20.0's claim that they were covered was only half true.
+- Video metadata stripping now passes `-map_metadata:s -1` as well as `-map_metadata -1`, matching `sanitize`. In testing the bare form already cleared per-stream tags on a stream copy, but only the global scope is documented behaviour, and a privacy default should not rest on that.
+- `add-subtitles` applies the metadata policy.
+- Removed stale web-UI references missed by 0.16.0: the package description, a `package-data` glob pointing at the deleted `web/`, and two module docstrings.
+
+### Known gaps (not fixed here)
+- **`audio_ops.py` has no metadata policy at all.** ID3/Vorbis tags — artist, comment, encoder — pass through `convert`, `trim`, `normalize`, `fade`, `resample` and `clean` untouched. Same class as the video leak fixed in 0.20.0; deferred rather than rushed, since it is a separate surface with its own tag semantics.
+- `extract-audio`, `extract-frames` and `slideshow` still carry source metadata.
+
+## 0.20.0
+
+### Changed (privacy)
+- **Video ops no longer carry identifying metadata into their output.** `trim`, `convert`, `resize`, `crop`, `rotate`, `concat`, `match-duration` and `add-audio` all passed the source's container tags straight through, so a trimmed phone video shipped its **GPS coordinates**, camera make/model and capture time. Only `sanitize` stripped them. Verified against a tagged clip before and after.
+  - This is the mirror of the image bug fixed in 0.17.0: image ops dropped everything including data they should have kept; video ops kept everything including data they should have dropped.
+  - Locally generated files showed the payload is not just location — AI video tools embed their full workflow and prompt text in the `comment` tag, measured at 41 KB and 109 KB on two real files.
+  - `--preserve-metadata` opts back in.
+
+### Why this was safe to default on
+Rotation is unaffected, which was the open question blocking this change. Verified against a video carrying a 90-degree display matrix: on a **stream copy** the matrix survives `-map_metadata -1` intact; on a **re-encode** ffmpeg auto-rotates during decode, so the pixels come out upright and the matrix is no longer needed. Source, copy and re-encode all display identically.
+
+Note the granularity differs from images by necessity. For images the kept set is an allowlist, so `--preserve-metadata` restores authorship tags without re-admitting GPS. ffmpeg's `-map_metadata` is all-or-nothing at the container level, so for video the flag keeps everything, location included.
+
+## 0.19.1
+
+### Fixed
+- **Animated images are refused instead of silently flattened.** `.gif` was routed to the video path for exactly this reason, but `.webp` and `.png` were not — so an animated WebP went through the image ops and kept only frame 1. A real 239-frame, 20 MB file came out as a single 52 KB still with no warning. The guard is keyed to format as well as `is_animated`, because MPO (iPhone HDR) also reports `is_animated` and its second frame is a gain map, not animation — taking frame 1 there is correct.
+- **Cartoon and anti-aliased vector art now classify as flat.** The classifier leaned on unique-colour count, which breaks on anti-aliased content: every edge generates intermediate shades, so frames from one animation measured 12k–26k colours and near-identical frames split between the two classes. Six of seven got the loose target and were compressed to **q25–q29**; all seven now land at **q81–q93** (10x–18x reduction, SSIM ~0.995).
+  - Classification now uses flat-run fraction plus **hard-edge density**. The second term is what separates cartoon and text (real edges) from a smooth gradient, which also has many flat runs but no edges and should stay continuous-tone.
+  - **The classes genuinely overlap on these features** — photographs measured 0.054–0.388 flat-run, upscaled renders ~0.53, cartoon and screenshots 0.104–0.923. The threshold is set to keep photographs and upscaled renders out, accepting that some flat content is still missed. That is the pre-existing failure, not a new one, but it is a failure: the real fix is a metric that sees edge ringing rather than a better guess at content type.
+
+## 0.19.0
+
+### Fixed
+- **Text and UI screenshots are no longer compressed into mush.** Flat content (text, line art, UI chrome) now targets SSIM 0.995 rather than the 0.98 default.
+  - SSIM's scale is compressed on hard edges, so the usual target let the search bottom out at the lowest quality it was permitted to try. Measured on a real 1979x1307 terminal screenshot: WebP q25 scored **0.9898** with visibly ringing, mushy glyphs, while q60 — clearly legible — scored only **0.9951**. The entire bad-to-fine range spans 0.005, well inside what a 0.98 target treats as acceptable.
+  - Across eight real screenshots the selected quality moved from q25/q30/q35 to q58–q84. Files grew modestly (e.g. 18K to 32K) while reductions stayed at 6.5x–25.6x.
+  - This is a stopgap keyed to the content classifier, not a fix for the metric. A metric that actually sees edge ringing is the real answer; screenshots the classifier reads as photographic still get the looser target.
+
+## 0.18.1
+
+### Fixed
+Found by broadening validation beyond RGB PNG/JPEG — a synthetic colour-mode/format matrix plus a stratified sample of real local images.
+
+- **CMYK images no longer fail on PNG/WebP output.** `_save_image` handled alpha incompatibility but not colour-space incompatibility, so a CMYK scan raised `OSError: cannot write mode CMYK as PNG`. Each container now declares the modes it can store, and unsupported modes are converted to the nearest representable one.
+- **16-bit and bilevel images no longer fail to resize.** LANCZOS rejects `I;16` and `1` outright — `thumbnail` raised `ValueError: image has wrong mode` from the resampling step, not the encoder. Such modes are promoted to a continuous-tone mode before resampling. Palette images are promoted too: resampling P-mode interpolates palette *indices* rather than colours, producing arbitrary hues.
+- **`resize --percentage` never produces a zero dimension.** Scaling a very small image rounds to zero and PIL rejects it; a real 1x1 image failed at 25%.
+- **`strip-metadata` refuses mode-lossy targets with a clear message** instead of a raw `OSError`. Converting CMYK to RGB to satisfy a `.png` target would alter pixels, which is precisely what this op must not do.
+- **`strip-metadata` now keeps the ICC profile.** Dropping it changes how the image renders — a pixel-level change in all but name. This op removes EXIF/IPTC/XMP annotations, not colour semantics.
+
+## 0.18.0
+
+### Fixed
+- **`compress` no longer rejects images it can actually compress.** Quality was chosen by binary-searching a 512px crop of the busiest region, and that result was final. But the busiest tile is the *hardest* part of the frame, so it scores below the image as a whole and vetoed encodes that were comfortably achievable. On a sample of 18 real photographs and renders, **7 failed outright** with "No candidate satisfied the constraints" — including one whose full-image SSIM reached 0.985 at a quality the search never tried.
+  - The full image is now authoritative; the probe crop only narrows the starting bracket and can no longer veto. All 18 now succeed.
+  - The probe also *over*-shot in the other direction. On the 6144x2560 test image the search now selects q78 rather than q86 for the same target — 0.32 MB instead of 0.47 MB, a 34x reduction rather than 23x. Correctness improved the output as well as the success rate.
+  - Cost: searching at full resolution is slower (~3s to ~10s on a 16 MP image). That is the price of the answer being right.
+- **Unsupported output extensions are rejected instead of double-suffixed.** `compress photo.png photo.bmp` wrote `photo.bmp.jpg`; `.bmp`, `.gif` and `.tif` are all in this project's own `IMAGE_EXTS`, so this was easy to hit. The error now lists the extensions that work.
+- **An explicit `.avif` output implies `--allow-avif`.** Naming the extension is an explicit request; the flag exists to stop AVIF being chosen *accidentally*. Previously this failed with an error that never mentioned AVIF.
+- **Unreachable targets say what was achievable**: "The best achievable was SSIM 0.9996; try --target-ssim 0.999" rather than a bare refusal.
+
+### Changed
+- AVIF encoder effort 6 -> 7, measured both smaller and faster at every quality tested. Pinned with a guard against 8, which inflates output 3.7-7x in Pillow's AVIF encoder specifically (avifenc does not do this).
+
+### Internal
+- Replaced a tautological lossless test that asserted `Candidate.ssim == 1.0` — a constant hardcoded in the source, never measured. It now decodes each candidate and compares pixels against the original, and was verified to fail against a deliberately-lossy encoder.
+
+## 0.17.0
+
+### Fixed
+All six defects below were verified by execution before and after the fix. The 304-test suite passed against every one of them.
+
+- **EXIF orientation is applied, not discarded.** `Image.open` does not rotate by orientation tag, so a phone photo arrived as a landscape buffer. `crop` therefore operated on pixels the user could not see — cropping a region off a portrait photo hit the wrong part of the image — and every op dropped the tag on save, so output displayed sideways in viewers that had previously corrected it. Orientation is now baked into pixels on open.
+- **ICC colour profiles survive.** Profiles were dropped on `.jpg` and `.webp` output but kept on `.png` and `.avif` — not by design, but because Pillow's PNG and AVIF plugins fall back to `im.info` while its JPEG and WebP plugins read the save kwarg only. A Display-P3 image converted to JPEG was silently reinterpreted as sRGB.
+- **`strip-metadata` no longer destroys palette images.** It built `Image.new(mode, size)` and pasted into it; for P-mode that allocates a *default* palette, and pasting P-into-P copies raw indices without remapping. A four-colour PNG came out solid black.
+- **`--quality` reaches the AVIF encoder.** Only jpg/jpeg/webp were passed a quality argument, so every `.avif` export used Pillow's default of 75. quality=1 and quality=100 produced byte-identical files.
+- **Off-axis rotation no longer bakes in black corners.** `Image.rotate` was called without `fillcolor`, so the corners exposed by a non-right-angle rotation were zero-filled — opaque black on any RGB image, with no way to override. Exposed corners are now transparent by default, with a new `--fill` option.
+- **Palette and alpha inputs no longer crash on JPEG output.** `convert` flattened RGBA/P/LA before saving; `resize`, `crop` and `thumbnail` did not, so identical input raised `OSError: cannot write mode P as JPEG` depending on which verb you used. Flattening now composites onto white rather than converting straight to RGB, which would composite transparency onto black.
+
+### Added
+- **A metadata privacy policy, applied by default.** Identifying metadata — GPS coordinates, camera make/model, capture timestamps — is stripped from output. Rendering-critical data (orientation, colour profile) is always preserved, since it is part of the image rather than an annotation on it.
+  - `--preserve-metadata` keeps authorship tags (copyright, artist, description). It does **not** re-admit GPS: provenance and location are different categories.
+  - The tag list is an allowlist, so a tag nobody has classified is not a leak.
+  - This differs from macOS's Convert Image, which preserves by default. These verbs write a *new* file, so the original retains everything while a leaked location does not come back, and the dominant use here is compress-to-share.
+- `adjust --fill` sets the corner colour for non-right-angle rotations (default transparent).
+- `info` reports *displayed* dimensions for rotated images, with `raw_width`/`raw_height` when they differ. A portrait phone photo previously reported its landscape buffer.
+
+### Internal
+- Added `_open_image` / `_save_image` in `image_ops.py`; all seven ops route through them. The six defects above were one missing abstraction rather than six independent bugs, which is why they were mutually inconsistent.
+
+## 0.16.1
+
+### Fixed
+- **Image operations no longer require ffmpeg.** `main()` checked for the toolchain unconditionally, so `vidtools resize photo.png out.png` — pure PIL, no subprocess — refused to run on a machine without ffmpeg installed. The check is now scoped to invocations that actually need it (`_needs_ffmpeg`), with multi-media verbs deciding from the input's kind.
+
+### Internal
+- **Test foundation.** Added `tests/conftest.py` (there was none): shared image fixtures, suite-wide progress-sink isolation, and marker-driven skipping. Registered `ffmpeg` and `pil_real` markers with `--strict-markers`.
+  - Previously a machine without ffmpeg ran 289 of 304 tests, skipped 15, and **exited 0** — reporting success while dropping every behavioural check in the project. Skipping is now driven by capability rather than file location, and the PIL-only tests run everywhere. The suite reports the same failures with and without ffmpeg.
+  - The shared image fixture was a single flat colour, which makes crop/flip/rotate correctness untestable in principle — a real horizontal flip and a no-op are pixel-identical on it. It is now four distinct quadrants.
+  - Added `tests/test_imaging_contract.py`: contract tests for EXIF orientation, ICC profiles, palette preservation, format-specific save options, rotation fill, and the metadata privacy policy. **12 of these currently fail** — they assert intended behaviour ahead of the imaging refactor, so that a green suite afterwards means something.
+  - Split the two PIL-only CLI tests out of `test_integration.py` into `tests/test_cli_image_paths.py`; living there meant inheriting a module-level ffmpeg gate.
+
+## 0.16.0
+
+### Removed
+- **The web UI is gone.** `server.py` (FastAPI + WebSocket), `jobs.py`, `db.py`, `security.py`, `vidtools/web/`, and `deploy/` are deleted — 3,436 lines, along with the 71 tests covering them. The CLI is now the only surface.
+  - Drops five dependencies: `fastapi`, `uvicorn[standard]`, `python-multipart`, `python-jose[cryptography]`, `bcrypt`. The resolved dependency graph goes from 118 packages to 95.
+  - Rationale: the CLI imported none of it, so it was cleanly separable, and it carried real defects that were never going to be worth fixing — image inputs were routed to ffmpeg's video path because the server had no media-kind detection, and uploads had no MIME allowlist, extension allowlist, or magic-byte sniffing. Its test coverage was largely illusory: zero HTTP-level tests existed (no `TestClient` anywhere), and only 1 of 13 dispatch handlers had any test.
+  - A macOS Quick Action is planned as the second surface instead. Git history retains everything if it is ever wanted back.
+
+## 0.15.0
+
+### Added
+- **`compress`** — a new image verb that picks the format *and* quality by measuring, not by heuristic. It encodes candidates, scores each against the original with SSIM, and writes the smallest one that meets a fidelity target (`--target-ssim`, default 0.98). Also supports `--lossless` (exact encodes only) and `--max-size 500k` (maximise fidelity within a byte budget). `--dry-run` reports the ranked candidates without writing.
+  - Distinct from `optimize`, which recompresses into the format named by the output extension. `compress` chooses the format; give it an output path without an extension (or none at all) and the winner supplies one.
+  - **Defaults to PNG/JPEG/WebP, excluding AVIF.** AVIF compressed ~2x better than WebP in testing, but no major vision API decodes it — the Claude API accepts JPEG/PNG/GIF/WebP and Gemini accepts PNG/JPEG/WebP/HEIC/HEIF, and neither converts client-side. Defaulting to AVIF would emit files those tools cannot read at all. `--allow-avif` opts in for storage or browser targets.
+  - Quality is searched on a native-resolution crop of the highest-variance region, not a downscaled proxy: downscaling averages away the blocking and ringing the search exists to detect, and a flat-region crop would over-recommend aggressive quality.
+  - Pillow-only (no `cwebp`/`avifenc`/`oxipng` subprocesses); a build without AVIF or WebP degrades to the formats it has rather than failing.
+  - Caveat, stated in the module docstring: SSIM is a mediocre perceptual metric, chosen because it is computable with numpy alone and is monotonic in encode quality. The default target is eyeball-calibrated, not perceptually principled.
+
+### Fixed
+- Content classification no longer misreads smooth or upscaled images as flat art. Flat *runs* alone were treated as evidence of synthetic content, but upscaled photos are full of adjacent-equal pixels simply because smooth gradients quantize to the same 8-bit value — a real 6144x2560 upscaled render measured 69% adjacent-equal with ~29k unique colours. Flat runs now only count when the palette is also small. The misclassification made the search spend ~35s on full-resolution lossless encodes that never win; the same image now completes in ~3s with an identical result.
+
 ## 0.14.1
 
 ### Fixed
