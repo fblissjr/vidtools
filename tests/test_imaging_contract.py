@@ -342,3 +342,65 @@ def test_gif_stays_video_for_dispatch():
     from vidtools.utils import IMAGE_EXTS
     assert _detect_kind("x.gif") == "video"
     assert ".gif" not in IMAGE_EXTS
+
+
+# --- G13: hostile and malformed input -------------------------------------
+#
+# A decompression bomb is a small file that decodes huge (18000x18000 solid
+# colour is under 1 MB on disk and ~1 GB in RAM). Pillow already refuses these,
+# but it raises PIL-specific exceptions that main() does not catch, so the user
+# got a traceback -- which also prints absolute paths. The op must fail with a
+# clean, actionable message like every other validation error.
+
+@pytest.mark.pil_real
+def test_decompression_bomb_raises_clean_error(tmp_path):
+    from vidtools.image_ops import _open_image
+    bomb = tmp_path / "bomb.png"
+    Image.new("RGB", (18000, 18000), (255, 0, 0)).save(bomb, optimize=True)
+    with pytest.raises(ValueError) as exc:
+        _open_image(str(bomb))
+    msg = str(exc.value).lower()
+    assert "too large" in msg or "pixel" in msg
+    assert "traceback" not in msg
+
+
+@pytest.mark.pil_real
+def test_non_image_raises_clean_error(tmp_path):
+    from vidtools.image_ops import _open_image
+    fake = tmp_path / "notreally.png"
+    fake.write_bytes(b"this is not a png at all")
+    with pytest.raises(ValueError) as exc:
+        _open_image(str(fake))
+    assert "not a readable image" in str(exc.value).lower()
+
+
+@pytest.mark.pil_real
+def test_truncated_image_raises_clean_error(tmp_path):
+    from vidtools.image_ops import _open_image
+    good = tmp_path / "good.png"
+    Image.new("RGB", (400, 400), (10, 200, 30)).save(good)
+    data = good.read_bytes()
+    trunc = tmp_path / "trunc.png"
+    trunc.write_bytes(data[:len(data) // 3])
+    with pytest.raises(ValueError):
+        _open_image(str(trunc))
+
+
+@pytest.mark.pil_real
+@pytest.mark.parametrize("op", ["info", "strip_metadata", "profile"])
+def test_inspectors_also_fail_cleanly_on_hostile_input(tmp_path, op):
+    """The inspectors and strip_image_metadata bypass _open_image on purpose --
+    they must not transpose what they report on -- but they share the error
+    translation, so hostile input still raises ValueError rather than a PIL
+    exception the CLI does not catch."""
+    from vidtools import image_ops
+    bad = tmp_path / "bad.png"
+    bad.write_bytes(b"definitely not a png")
+    out = tmp_path / "out.png"
+    fn = {
+        "info": lambda: image_ops.get_image_info(str(bad)),
+        "strip_metadata": lambda: image_ops.strip_image_metadata(str(bad), str(out)),
+        "profile": lambda: image_ops.describe_color_profile(str(bad)),
+    }[op]
+    with pytest.raises(ValueError):
+        fn()

@@ -28,7 +28,8 @@ publishing coordinates nobody meant to publish.
 import os
 from typing import Any
 
-from PIL import Image, ImageCms, ImageEnhance, ImageOps
+from contextlib import contextmanager
+from PIL import Image, UnidentifiedImageError, ImageCms, ImageEnhance, ImageOps
 
 from .utils import logger
 
@@ -103,6 +104,36 @@ def _prepare_for_resample(img: Image.Image) -> Image.Image:
     return img.convert("I")  # 16-bit integer modes
 
 
+@contextmanager
+def _open_raw(input_file: str):
+    """`Image.open` with hostile-input errors translated to `ValueError`.
+
+    Raw: no orientation applied, no ICC handling. Use `_open_image` for anything
+    that renders pixels. This exists for the three call sites that legitimately
+    need the undecoded original -- `strip_image_metadata` edits the container
+    rather than re-rendering, and the two inspectors must not transpose what
+    they are reporting on -- but which still have to fail cleanly.
+
+    Pillow's own exceptions are not caught by the CLI entrypoint, so without
+    this they reach the user as a traceback that also prints absolute paths.
+    """
+    try:
+        with Image.open(input_file) as handle:
+            yield handle
+    except Image.DecompressionBombError as exc:
+        raise ValueError(
+            f"{input_file}: image is too large to process safely ({exc}). "
+            "This is the guard against decompression-bomb files."
+        ) from exc
+    except UnidentifiedImageError as exc:
+        raise ValueError(
+            f"{input_file}: not a readable image. The extension may not match "
+            "the actual file contents."
+        ) from exc
+    except OSError as exc:
+        raise ValueError(f"{input_file}: could not be read as an image ({exc}).") from exc
+
+
 def _open_image(input_file: str) -> Image.Image:
     """Open an image with orientation applied and the colour profile retained.
 
@@ -114,8 +145,16 @@ def _open_image(input_file: str) -> Image.Image:
 
     `exif_transpose` clears the tag it consumes, so the caller must not
     re-attach the source EXIF wholesale.
+
+    Malformed and hostile input is converted to `ValueError` here. Pillow's own
+    exceptions (`DecompressionBombError`, `UnidentifiedImageError`) are not
+    caught by the CLI entrypoint, so they reached the user as a traceback --
+    which is both unreadable and prints absolute paths. A decompression bomb is
+    a small file that decodes huge: 18000x18000 of one colour is under 1 MB on
+    disk and about 1 GB in memory. Pillow refuses those by default; this only
+    changes how the refusal is reported.
     """
-    with Image.open(input_file) as handle:
+    with _open_raw(input_file) as handle:
         if getattr(handle, "is_animated", False) and handle.format in _ANIMATED_FORMATS:
             # Silently keeping frame 1 discarded the rest: a real 239-frame,
             # 20 MB animated WebP came out as a single 52 KB still. `.gif` is
@@ -340,7 +379,7 @@ def strip_image_metadata(input_file: str, output_file: str):
     ext = _ext(output_file)
     supported = _FORMAT_MODES.get(ext)
 
-    with Image.open(input_file) as handle:
+    with _open_raw(input_file) as handle:
         source_quantization = getattr(handle, "quantization", None)
         source_subsampling = None
         if handle.format == "JPEG":
@@ -441,7 +480,7 @@ def get_image_info(input_file: str) -> dict:
     such image. `raw_width`/`raw_height` expose the stored values when they
     differ.
     """
-    with Image.open(input_file) as handle:
+    with _open_raw(input_file) as handle:
         raw_size = handle.size
         oriented = ImageOps.exif_transpose(handle)
         size = oriented.size if oriented is not None else raw_size
@@ -459,7 +498,7 @@ def get_image_info(input_file: str) -> dict:
 
 def describe_color_profile(input_file: str) -> str | None:
     """Return the embedded ICC profile's description, if any."""
-    with Image.open(input_file) as img:
+    with _open_raw(input_file) as img:
         profile = img.info.get("icc_profile")
     if not profile:
         return None
