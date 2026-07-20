@@ -164,7 +164,7 @@ vidtools pipeline in.mp4 out.mp4 trim --start 60 --end 90 resize -p 0.5 convert 
 uv run pytest tests/ -v
 ```
 
-16 test files plus `conftest.py`: operations, ytdlp, audio_ops, image_ops, imaging_contract, cli_image_paths, compress, dispatch, progress, pipeline, separation, integration, macos_workflow, macos_quick_action, subtitles, audio_probe.
+17 test files plus `conftest.py`: operations, ytdlp, audio_ops, image_ops, imaging_contract, cli_image_paths, compress, dispatch, progress, pipeline, separation, integration, macos_workflow, macos_quick_action, subtitles, audio_probe, macos_install.
 
 `test_macos_quick_action.py` runs the Quick Action *shell script* under its own
 shebang with stubbed `vidtools`/`osascript`. Executing by path rather than
@@ -173,8 +173,14 @@ forcing `/bin/zsh` is deliberate — forcing the interpreter masks a regression 
 flags. macOS-only; skipped elsewhere.
 
 `test_macos_workflow.py` asserts on the dicts `make_workflow.build_workflow` /
-`build_info_plist` return. **Nothing runs `install.sh`, so nothing covers
-installation itself** — do not read a green suite as "the Quick Action works".
+`build_info_plist` return. `test_macos_install.py` runs `install.sh` for real
+against a temp Services dir (`VIDTOOLS_SERVICES_DIR` overrides the install
+location — nothing but tests should set it) and checks bundle *identity* across
+a reinstall, which is the one thing a dict assertion cannot see.
+
+Still uncovered: whether macOS actually registers the result. `pbs -dump_pboard`
+is the only check for that, and it lags a `pbs -flush` by a few seconds — a
+grep immediately after install reads 0 and means nothing.
 
 The Quick Action has shipped four defects, each in a different layer than the
 previous fix: shell semantics (bash 3.2 empty-array), output discovery (a glob

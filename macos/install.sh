@@ -18,7 +18,9 @@ set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 NAME="Compress Image"
-SERVICES="$HOME/Library/Services"   # path-privacy: ignore -- the OS decides where Quick Actions live
+# Overridable so tests can install into a temp dir instead of the real Services
+# folder. Nothing else should set it.
+SERVICES="${VIDTOOLS_SERVICES_DIR:-$HOME/Library/Services}"   # path-privacy: ignore -- the OS decides where Quick Actions live
 BUNDLE="$SERVICES/$NAME.workflow"
 
 # Prefer the project venv binary over PATH: Automator runs with a minimal PATH,
