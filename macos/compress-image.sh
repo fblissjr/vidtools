@@ -87,15 +87,13 @@ for f in "$@"; do
     out="$dir/${stem}_compressed"
 
     before=$(/usr/bin/stat -f%z "$f" 2>/dev/null || echo 0)
-    if "$VIDTOOLS" compress "${ARGS[@]}" "$f" "$out" >/dev/null 2>&1; then
-        # Glob rather than parsing `ls` output, so filenames with spaces and
-        # quotes survive. A stale file from an earlier run in a different format
-        # can still be picked up here; the size report is best-effort.
-        after=0
-        for cand in "$dir/${stem}_compressed."*; do
-            [ -f "$cand" ] || continue
-            after=$(/usr/bin/stat -f%z "$cand" 2>/dev/null || echo 0)
-        done
+    # Ask where it wrote rather than rediscovering it. `compress` chooses the
+    # extension, so the output path is not predictable from the input, and
+    # globbing for it picks up a stale file from an earlier run that chose a
+    # different format -- reporting a saving against the wrong file.
+    if report=$("$VIDTOOLS" compress "${ARGS[@]}" "$f" "$out" 2>/dev/null); then
+        written=${${(M)${(f)report}:#wrote *}#wrote }
+        after=$(/usr/bin/stat -f%z "$written" 2>/dev/null || echo 0)
         ok=$((ok + 1))
         total_before=$((total_before + before))
         total_after=$((total_after + after))
