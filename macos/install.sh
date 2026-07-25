@@ -68,7 +68,27 @@ fi
 # re-scan. Staging alongside the target keeps the swap on one filesystem.
 mkdir -p "$SERVICES"
 STAGE=$(mktemp -d "$SERVICES/.$NAME.staging.XXXXXX")
-trap 'rm -rf "$STAGE"' EXIT
+PREVIOUS="$SERVICES/.$NAME.previous.$$"
+
+# The trap has to stay armed through the swap, not just through generation.
+# Deleting the installed bundle outright and then moving the new one in looks
+# atomic but is not: if the delete fails partway -- one immutable or locked file
+# is enough -- the script aborts having already gutted the old bundle, and a
+# trap that only removed $STAGE would throw away the good replacement too. That
+# is strictly worse than the delete-then-generate order this replaced, which at
+# least had no finished build to lose.
+#
+# So the old bundle is moved aside rather than deleted, and cleanup restores it
+# if the bundle slot ended up empty. Ordering matters: restore before removing
+# the backup, and never let cleanup failures mask the real exit status.
+cleanup() {
+    rm -rf "$STAGE" 2>/dev/null || true
+    if [ -d "$PREVIOUS" ] && [ ! -e "$BUNDLE" ]; then
+        mv "$PREVIOUS" "$BUNDLE" 2>/dev/null || true
+    fi
+    rm -rf "$PREVIOUS" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 mkdir -p "$STAGE/Contents"
 SCRIPT_SRC="$REPO_ROOT/macos/compress-image.sh"
@@ -77,9 +97,13 @@ BIN="$BIN" SCRIPT_SRC="$SCRIPT_SRC" NAME="$NAME" \
     "$PYTHON" "$REPO_ROOT/macos/make_workflow.py" \
     "$STAGE/Contents/document.wflow" "$STAGE/Contents/Info.plist"
 
-rm -rf "$BUNDLE"
+# Renaming the old bundle away is what makes the swap recoverable. A rename
+# succeeds even when the directory holds a file that cannot be deleted, so the
+# unremovable-file case ends with the new action installed rather than none.
+if [ -e "$BUNDLE" ]; then
+    mv "$BUNDLE" "$PREVIOUS"
+fi
 mv "$STAGE" "$BUNDLE"
-trap - EXIT
 
 
 /System/Library/CoreServices/pbs -flush >/dev/null 2>&1 || true

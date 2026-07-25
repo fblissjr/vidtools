@@ -149,6 +149,32 @@ def test_failed_generation_leaves_the_previous_bundle_intact(fake_repo, services
     assert after == before, "a failed install destroyed the working bundle"
 
 
+def test_a_failed_swap_never_leaves_a_destroyed_bundle(fake_repo, services):
+    """Claim: deleting this lets a failure during the *swap* destroy both the
+    installed bundle and the freshly built replacement.
+
+    Staging exists so a failed install leaves the previous action intact, and
+    that held for failures during generation. It did not hold for the swap: the
+    EXIT trap stayed armed across `rm -rf "$BUNDLE"`, so a partial delete took
+    out the old bundle while the trap deleted the new one -- strictly worse than
+    the delete-then-generate order it replaced, which at least had no good build
+    to throw away.
+
+    An immutable file is the cheapest way to make the delete fail for real."""
+    assert _install_from(fake_repo, services).returncode == 0
+    bundle = services / f"{NAME}.workflow"
+    subprocess.run(["chflags", "uchg", str(bundle / "Contents" / "Info.plist")],
+                   check=True)
+    try:
+        _install_from(fake_repo, services)
+        present = {p.name for p in (bundle / "Contents").iterdir()}
+        assert present == {"document.wflow", "Info.plist"}, (
+            f"bundle left incomplete after a failed swap: {sorted(present)}")
+    finally:
+        # Must run, or tmp_path teardown cannot remove the tree.
+        subprocess.run(["chflags", "-R", "nouchg", str(bundle)], check=False)
+
+
 def test_install_does_not_depend_on_python3_from_path(fake_repo, services, tmp_path):
     """Claim: deleting this lets the install bind to whatever python3 PATH
     happens to surface -- which on this machine is a user-local 3.14, not the

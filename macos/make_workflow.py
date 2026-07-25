@@ -1,8 +1,11 @@
 """Generate the Automator Quick Action workflow document.
 
-Extracted from install.sh so the plist can be tested. Nothing here needs the
-vidtools package -- it is stdlib-only on purpose, so install.sh can run it with
-the system python3 before (or without) a working venv.
+Extracted from install.sh so the plist can be tested. Stdlib-only on purpose:
+nothing here imports the vidtools package, so generating a bundle cannot fail
+for a reason that belongs to the thing being packaged. install.sh runs it with
+the venv's own interpreter, after checking the venv resolves -- an earlier
+version used PATH's `python3` on the theory that this file had to work without
+a venv, but install.sh has required one since well before it gets here.
 
 The metadata keys in `_WORKFLOW_METADATA` are not a plausible-looking subset.
 They were arrived at by diffing against a Quick Action that Automator itself
