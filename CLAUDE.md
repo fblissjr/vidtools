@@ -173,10 +173,23 @@ forcing `/bin/zsh` is deliberate — forcing the interpreter masks a regression 
 flags. macOS-only; skipped elsewhere.
 
 `test_macos_workflow.py` asserts on the dicts `make_workflow.build_workflow` /
-`build_info_plist` return. `test_macos_install.py` runs `install.sh` for real
-against a temp Services dir (`VIDTOOLS_SERVICES_DIR` overrides the install
-location — nothing but tests should set it) and checks bundle *identity* across
-a reinstall, which is the one thing a dict assertion cannot see.
+`build_info_plist` return, plus its `main()` guards driven as a subprocess.
+`test_macos_install.py` runs `install.sh` for real against a temp Services dir
+(`VIDTOOLS_SERVICES_DIR` overrides the install location — nothing but tests
+should set it) and checks bundle *identity* across a reinstall, which is the one
+thing a dict assertion cannot see. It builds a throwaway repo copy (`fake_repo`)
+for the failure cases, so a test can break the generator without touching the
+real tree.
+
+`make_workflow.main()` **refuses to generate when `@VIDTOOLS_BIN@` is absent**.
+`str.replace` on a string without the token is a silent no-op that emits a
+bundle carrying no binary path, failing much later as "vidtools binary not
+found". Note the installer-side assertion cannot catch this: it checks the
+placeholder is *absent from the output*, which a renamed placeholder satisfies
+trivially. It also reads the script as explicit utf-8 — the AppleScript block
+uses `¬` continuations, and the default is locale-dependent. macOS reports utf-8
+even under `LC_ALL=C`, so that one is insurance, not a fix for an observed
+failure.
 
 Still uncovered: whether macOS actually registers the result. `pbs -dump_pboard`
 is the only check for that, and it lags a `pbs -flush` by a few seconds — a

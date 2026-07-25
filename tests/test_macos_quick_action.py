@@ -303,6 +303,22 @@ def test_success_reporting_still_works_with_the_stderr_capture(tmp_path):
     assert "x smaller" in told, f"size report lost: {told!r}"
 
 
+def test_exit_zero_without_an_output_file_counts_as_failure(tmp_path):
+    """Claim: deleting this lets `ok` mean "the process exited 0" rather than
+    "a file was written".
+
+    Without the check a compress that succeeds but names no output leaves
+    `written` empty, `stat` yields 0, and the file is still reported compressed
+    -- with the saving silently missing from the ratio."""
+    vt = ("#!/bin/zsh\n"
+          'if [ "$1" = "--help" ]; then exit 0; fi\n'
+          'echo "1200x900 flat, 1.00 MB"\n'      # plausible stdout, no `wrote` line
+          "exit 0\n")
+    r, told = _run_with_stub(tmp_path, vt, files=[_image(tmp_path)])
+    assert r.returncode == 1, f"reported success with no output file: {told!r}"
+    assert "Could not compress" in told
+
+
 def test_script_is_zsh_not_bash():
     assert SCRIPT.read_text().startswith("#!/bin/zsh")
 

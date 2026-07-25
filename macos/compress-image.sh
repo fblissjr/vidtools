@@ -118,8 +118,13 @@ for f in "$@"; do
     # extension, so the output path is not predictable from the input, and
     # globbing for it picks up a stale file from an earlier run that chose a
     # different format -- reporting a saving against the wrong file.
-    if report=$("$VIDTOOLS" compress "${ARGS[@]}" "$f" "$out" 2>"$errfile"); then
-        written=${${(M)${(f)report}:#wrote *}#wrote }
+    if report=$("$VIDTOOLS" compress "${ARGS[@]}" "$f" "$out" 2>"$errfile") \
+        && written=${${(M)${(f)report}:#wrote *}#wrote } \
+        && [ -n "$written" ] && [ -f "$written" ]; then
+        # Counting exit status alone would make `ok` mean "the process exited 0"
+        # rather than "a file was written" -- so a run that named no output
+        # would still be reported as compressed, with its saving missing from
+        # the ratio. Require the file.
         after=$(/usr/bin/stat -f%z "$written" 2>/dev/null || echo 0)
         ok=$((ok + 1))
         total_before=$((total_before + before))

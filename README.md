@@ -248,6 +248,17 @@ but the shell script is embedded into the bundle at install time -- editing
 the repo also breaks the action, which fails with a visible alert rather than
 doing nothing silently.
 
+The editable install is also the action's most likely failure. If the venv stops
+resolving the package -- a moved repo, an interrupted `uv sync`, a missing
+`vidtools/` -- the console script stays on disk and exits non-zero on every
+call. Both `install.sh` and the action itself check that the binary actually
+starts, so this surfaces as a named error telling you to re-run `uv sync`,
+rather than as a compression that silently does nothing. When a *file* fails,
+the alert carries the first error from `compress` rather than only a count.
+
+`install.sh` builds the bundle in a staging directory and swaps it in, so a
+failed install leaves the previous working action untouched.
+
 Automator rather than a native app, so there is no code-signing or notarisation
 step. The trade is that AppleScript cannot draw a multi-control panel, so it is
 one preset list instead of the Format / Size / Preserve Metadata trio. If that

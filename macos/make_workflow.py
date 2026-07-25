@@ -109,9 +109,29 @@ def build_info_plist(name: str) -> dict:
     }]}
 
 
+PLACEHOLDER = "@VIDTOOLS_BIN@"
+
+
 def main() -> None:
-    script = open(os.environ["SCRIPT_SRC"]).read().replace(
-        "@VIDTOOLS_BIN@", os.environ["BIN"])
+    src = os.environ["SCRIPT_SRC"]
+    # Explicit utf-8: the script's AppleScript block uses `¬` continuations, and
+    # the default here is locale-dependent. macOS happens to report utf-8 even
+    # under LC_ALL=C, so this is insurance rather than a fix for an observed
+    # failure -- but the cost of being wrong is a bundle that will not build.
+    with open(src, encoding="utf-8") as fh:
+        raw = fh.read()
+
+    # str.replace on a string without the token is a silent no-op, which would
+    # emit a bundle carrying no binary path at all. That fails much later and
+    # much less legibly, as "vidtools binary not found" at right-click time.
+    # Note the installer test cannot catch this: it asserts the placeholder is
+    # absent from the output, which a *renamed* placeholder also satisfies.
+    if PLACEHOLDER not in raw:
+        raise SystemExit(
+            f"error: {PLACEHOLDER} not found in {src}. The generated action "
+            f"would carry no path to the vidtools binary.")
+
+    script = raw.replace(PLACEHOLDER, os.environ["BIN"])
     with open(sys.argv[1], "wb") as fh:
         plistlib.dump(build_workflow(script), fh)
     with open(sys.argv[2], "wb") as fh:

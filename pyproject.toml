@@ -67,6 +67,10 @@ include = ["vidtools*"]
 [tool.ruff]
 line-length = 100
 target-version = "py314"
+
+# select/ignore live under [tool.ruff.lint]; at the top level ruff still honours
+# them but warns, and the warning prints on every invocation.
+[tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings

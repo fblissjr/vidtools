@@ -134,3 +134,50 @@ def test_info_plist_round_trips(tmp_path):
     p = tmp_path / "Info.plist"
     p.write_bytes(plistlib.dumps(doc))
     assert plistlib.loads(p.read_bytes()) == doc
+
+
+# --------------------------------------------------------------- main() guards
+
+MAKE_WORKFLOW = Path(__file__).resolve().parents[1] / "macos" / "make_workflow.py"
+
+
+def _run_main(tmp_path, script_text, bin_path="/somewhere/vidtools"):
+    src = tmp_path / "script.sh"
+    src.write_text(script_text, encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, str(MAKE_WORKFLOW),
+         str(tmp_path / "document.wflow"), str(tmp_path / "Info.plist")],
+        capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin", "SCRIPT_SRC": str(src),
+             "BIN": bin_path, "NAME": "Compress Image"},
+    )
+
+
+def test_missing_placeholder_is_refused(tmp_path):
+    """Claim: deleting this lets a renamed placeholder install silently.
+
+    `.replace()` on a string that lacks the token is a no-op, so the bundle
+    generates cleanly with no binary path in it and the action fails later with
+    "vidtools binary not found". The existing installer test cannot catch this:
+    it asserts `@VIDTOOLS_BIN@` is *absent* from the output, which a rename
+    satisfies trivially."""
+    r = _run_main(tmp_path, "#!/bin/zsh\necho no placeholder here\n")
+    assert r.returncode != 0, "generated a bundle with no binary path in it"
+    assert "@VIDTOOLS_BIN@" in (r.stderr + r.stdout), r.stderr
+
+
+def test_placeholder_present_still_generates(tmp_path):
+    r = _run_main(tmp_path, "#!/bin/zsh\nVIDTOOLS=\"@VIDTOOLS_BIN@\"\n")
+    assert r.returncode == 0, r.stderr
+    wf = plistlib.loads((tmp_path / "document.wflow").read_bytes())
+    assert "/somewhere/vidtools" in wf["actions"][0]["action"]["ActionParameters"][
+        "COMMAND_STRING"]
+
+
+def test_non_ascii_script_is_read_as_utf8(tmp_path):
+    """The real script's AppleScript block uses `¬` continuations. Reading it
+    under a locale-dependent encoding is a decode away from failing."""
+    r = _run_main(tmp_path, '#!/bin/zsh\n# @VIDTOOLS_BIN@ ¬ ¬ ¬\n')
+    assert r.returncode == 0, r.stderr
+    wf = plistlib.loads((tmp_path / "document.wflow").read_bytes())
+    assert "¬" in wf["actions"][0]["action"]["ActionParameters"]["COMMAND_STRING"]
