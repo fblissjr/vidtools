@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.28.0
+
+### Changed
+- **Python floor raised to 3.14.** `requires-python`, the trove classifiers, ruff's `target-version` and mypy's `python_version` all move together, and a `.python-version` file now pins the interpreter so `uv sync` cannot quietly build a venv on an older one. Raising the target introduced no new lint findings — ruff reports an identical count under `py312` and `py314`.
+
+### Fixed
+- **The Quick Action reported failure without reporting a cause.** `compress`'s stderr went to `/dev/null`, so when the venv's editable install pointed at a package directory that no longer existed, the alert said only "Could not compress 1 file(s)" and Automator followed it with an error dialog whose message was the empty string. The first failure's stderr is now carried into the alert.
+- **A dead binary passed for a working one.** Both `install.sh` and the embedded script tested the binary with `-x`, which proves a file is executable and nothing more. An editable install whose package is missing satisfies that and exits 1 on every call, so the installer printed `installed:` over it and deferred the failure to right-click time. Both now check that the binary actually starts, and say what to run.
+
+### Added
+- Alert and notification text is escaped before it reaches AppleScript. An unescaped `"` or `\` does not garble the dialog, it makes the whole script a syntax error so nothing is shown at all — which would have been the failure mode for the code path whose only job is reporting failure, now that it carries error text and filenames rather than fixed strings.
+- The installer builds into a staging directory and swaps it into place. Previously it deleted the installed bundle before it knew whether the replacement would build, so any failure during generation left nothing installed. The swap is still a directory replace, which is what forces macOS to re-scan.
+- The installer uses the venv's own interpreter rather than whichever `python3` PATH surfaces first. The venv is already a hard precondition, so its Python is the one guaranteed to be there.
+
 ## 0.23.1
 
 ### Fixed

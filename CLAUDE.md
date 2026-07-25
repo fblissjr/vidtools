@@ -12,7 +12,7 @@ two surfaces: the CLI, and a macOS Finder Quick Action (shipped 0.23.0) under
 install time, so a CLI change to `compress` does not reach it until
 `macos/install.sh` is re-run.
 
-Python >=3.12. Requires `ffmpeg` >= 5.1 and `yt-dlp` in PATH.
+Python >=3.14. Requires `ffmpeg` >= 5.1 and `yt-dlp` in PATH.
 
 **Homebrew's `ffmpeg` formula is slim** — ten dependencies, no libass, libwebp,
 libaom-av1 or libvorbis. `ffmpeg-full` is the batteries-included one. Consequences
@@ -182,12 +182,30 @@ Still uncovered: whether macOS actually registers the result. `pbs -dump_pboard`
 is the only check for that, and it lags a `pbs -flush` by a few seconds — a
 grep immediately after install reads 0 and means nothing.
 
-The Quick Action has shipped four defects, each in a different layer than the
+The Quick Action has shipped five defects, each in a different layer than the
 previous fix: shell semantics (bash 3.2 empty-array), output discovery (a glob
-matching a stale file), plist contents (metadata subset macOS ignores), and
-bundle lifecycle (overwriting in place, so macOS never re-scans). Only the
-third is covered here. The pattern to avoid is testing the layer just touched
-and calling the feature verified — check the OS's view, per the section above.
+matching a stale file), plist contents (metadata subset macOS ignores), bundle
+lifecycle (overwriting in place, so macOS never re-scans), and the environment
+underneath all of it (an editable install pointing at a package directory that
+no longer existed — the action was correct and had nothing to call). The
+pattern to avoid is testing the layer just touched and calling the feature
+verified — check the OS's view, per the section above.
+
+The fifth is the reason **`-x` is not an installability check**. It proves a
+file is executable, not that it imports; a broken editable install satisfies it
+and exits 1 on every call. Both `install.sh` and the embedded script now run
+`"$BIN" --help` as a pre-flight and refuse rather than deferring the failure to
+right-click time. Note the probe is `--help`: `vidtools` has **no `--version`
+flag**, so a smoke check using one would fail always and unconditionally.
+
+Failure reporting in the Quick Action carries the first failure's stderr into
+the alert, which means alert text is now attacker-shaped (error output,
+filenames) rather than fixed strings. It goes through `_as_quote` for that
+reason: an unescaped `"` or `\` in an AppleScript string literal is a *syntax
+error*, so the dialog does not garble — it never appears.
+`tests/test_macos_quick_action.py` proves this by feeding the recorded message literal
+back through real `osascript`, using `return` rather than `display alert` so
+the test does not draw a modal that would block the run.
 
 Two real-toolchain tiers, separated by marker rather than by file:
 
@@ -208,7 +226,9 @@ plutil -lint "$SERVICES/Compress Image.workflow"/Contents/*             # both p
 plutil -p <a working .workflow>/Contents/document.wflow                 # diff against one Automator wrote
 ```
 
-`install.sh` replaces the bundle rather than overwriting it — rewriting files in place leaves the bundle directory's mtime unchanged, so macOS keeps its cached registration and the action silently drops out of System Settings -> Login Items & Extensions -> Finder while still working from the right-click menu.
+`install.sh` builds into a staging directory alongside the target and swaps it in, rather than deleting the installed bundle and generating in its place — the old order destroyed a working action before knowing whether the replacement would build. The swap is still a directory *replace*, not an overwrite: rewriting files in place leaves the bundle directory's mtime unchanged, so macOS keeps its cached registration and the action silently drops out of System Settings -> Login Items & Extensions -> Finder while still working from the right-click menu.
+
+It also runs the venv's own `python3`, not PATH's. The venv is a hard precondition by that point, so its interpreter is the one guaranteed to exist; PATH's `python3` is whatever happens to be first.
 
 `install.sh` printing "installed:" only means files were written. macOS silently ignores a bundle whose metadata is incomplete, so check the services DB, not the filesystem.
 

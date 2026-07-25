@@ -6,7 +6,7 @@ Handles video (FFmpeg), images (PIL), and audio (FFmpeg).
 
 ## Quick start
 
-Requires Python 3.12+. Video and audio verbs need ffmpeg >= 5.1 and ffprobe in
+Requires Python 3.14+. Video and audio verbs need ffmpeg >= 5.1 and ffprobe in
 PATH; yt-dlp in PATH for URL downloads. The image verbs are pure PIL and run on
 a machine with no ffmpeg at all — the toolchain check is scoped to the
 invocations that actually need it.

@@ -11,6 +11,7 @@ are exercised without invoking the real compressor.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -45,9 +46,14 @@ def harness(tmp_path):
 
     # vidtools stub: record argv, write <out>.jpg, print the `wrote` line the
     # script parses to locate the output.
+    #
+    # `--help` is answered without being recorded. The script probes with it to
+    # check the binary actually starts, and logging that probe would make every
+    # invocation count read one too high.
     vt = bin_dir / "vidtools"
     vt.write_text(
         "#!/bin/zsh\n"
+        'if [ "$1" = "--help" ]; then exit 0; fi\n'
         f'print -r -- "$@" >> "{argfile}"\n'
         'out="${@[-1]}"\n'
         'printf "padding padding padding" > "$out.jpg"\n'
@@ -196,6 +202,105 @@ def test_missing_binary_fails_loudly(harness, tmp_path):
     r = subprocess.run(["/bin/zsh", str(runner), str(_image(tmp_path))],
                        capture_output=True, text=True)
     assert r.returncode == 1
+
+
+def _run_with_stub(tmp_path, vt_body, choice="Balanced (WebP)", files=()):
+    """Drive the script against a caller-supplied vidtools stub.
+
+    The `harness` fixture's stub always succeeds, so it cannot reach any of the
+    failure reporting. Returns (result, what-the-user-was-told).
+    """
+    bin_dir = tmp_path / "stub_bin"
+    bin_dir.mkdir()
+    vt = bin_dir / "vidtools"
+    vt.write_text(vt_body)
+    vt.chmod(0o755)
+
+    notify = tmp_path / "told.txt"
+    osa = bin_dir / "osascript"
+    osa.write_text(
+        "#!/bin/zsh\n"
+        'if [ "$1" = "-e" ]; then\n'
+        f'  print -r -- "$2" >> "{notify}"\n'
+        "  exit 0\n"
+        "fi\n"
+        f"print -r -- {choice!r}\n"
+    )
+    osa.chmod(0o755)
+
+    body = SCRIPT.read_text().replace("@VIDTOOLS_BIN@", str(vt))
+    body = body.replace("OSASCRIPT=/usr/bin/osascript", f"OSASCRIPT={osa}")
+    runner = tmp_path / "stub_run.sh"
+    runner.write_text(body)
+    runner.chmod(0o755)
+
+    r = subprocess.run([str(runner), *map(str, files)],
+                       capture_output=True, text=True)
+    return r, (notify.read_text() if notify.exists() else "")
+
+
+def test_failure_alert_names_the_cause(tmp_path):
+    """Claim: deleting this lets the alert go back to saying only "Could not
+    compress N file(s)".
+
+    That is exactly what a half-installed venv produced -- the real cause was a
+    ModuleNotFoundError on stderr, discarded by `2>/dev/null`, so the dialog
+    named no cause at all and the failure took a source dive to explain."""
+    vt = ("#!/bin/zsh\n"
+          'if [ "$1" = "--help" ]; then exit 0; fi\n'
+          'echo "ModuleNotFoundError: No module named vidtools" >&2\n'
+          "exit 1\n")
+    r, told = _run_with_stub(tmp_path, vt, files=[_image(tmp_path)])
+    assert r.returncode == 1
+    assert "ModuleNotFoundError" in told, f"cause not surfaced to the user: {told!r}"
+
+
+def test_alert_message_survives_quotes_and_backslashes(tmp_path):
+    """Claim: deleting this lets an unescaped " or \\ in an error message turn
+    the alert into an AppleScript syntax error, so the user sees *nothing*.
+
+    Feeding the recorded message literal back through real osascript is the
+    check -- it parses or it does not. `return` rather than `display alert`
+    keeps the test from drawing a modal that would block the run."""
+    nasty = 'cannot open "C:\\temp\\x" -- bad'
+    vt = ("#!/bin/zsh\n"
+          'if [ "$1" = "--help" ]; then exit 0; fi\n'
+          f'print -r -- {nasty!r} >&2\n'
+          "exit 1\n")
+    r, told = _run_with_stub(tmp_path, vt, files=[_image(tmp_path)])
+    assert r.returncode == 1
+
+    m = re.search(r'message "(.*)" as critical', told, re.S)
+    assert m, f"no alert recorded: {told!r}"
+    probe = subprocess.run(["/usr/bin/osascript", "-e", f'return "{m.group(1)}"'],
+                           capture_output=True, text=True)
+    assert probe.returncode == 0, (
+        f"alert body is not valid AppleScript, so no dialog appears: {probe.stderr}")
+
+
+def test_binary_present_but_not_runnable_fails_before_prompting(tmp_path):
+    """Claim: deleting this lets `-x` stand in for "works".
+
+    Through the whole of this bug the binary was present and executable and
+    exited 1 on every call. The pre-flight check must catch that and say what
+    to do about it, rather than prompting for a preset and failing per file."""
+    vt = "#!/bin/zsh\necho 'ModuleNotFoundError' >&2\nexit 1\n"
+    r, told = _run_with_stub(tmp_path, vt, files=[_image(tmp_path)])
+    assert r.returncode == 1
+    assert "install.sh" in told, f"no actionable remedy offered: {told!r}"
+
+
+def test_success_reporting_still_works_with_the_stderr_capture(tmp_path):
+    """Capturing stderr must not swallow the stdout the size report parses."""
+    vt = ("#!/bin/zsh\n"
+          'if [ "$1" = "--help" ]; then exit 0; fi\n'
+          'echo "a warning nobody needs" >&2\n'
+          'out="${@[-1]}"\n'
+          'printf "x" > "$out.webp"\n'
+          'echo "wrote $out.webp"\n')
+    r, told = _run_with_stub(tmp_path, vt, files=[_image(tmp_path, size=8192)])
+    assert r.returncode == 0, r.stderr
+    assert "x smaller" in told, f"size report lost: {told!r}"
 
 
 def test_script_is_zsh_not_bash():

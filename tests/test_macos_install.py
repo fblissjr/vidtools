@@ -12,6 +12,7 @@ macOS-only; these shell out to the real script.
 
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -87,6 +88,81 @@ def test_embedded_script_has_the_binary_substituted(services):
     script = wf["actions"][0]["action"]["ActionParameters"]["COMMAND_STRING"]
     assert "@VIDTOOLS_BIN@" not in script, "placeholder left unsubstituted"
     assert script.startswith("#!/bin/zsh")
+
+
+@pytest.fixture
+def fake_repo(tmp_path):
+    """A minimal repo copy, so a test can break the build without touching the
+    real tree. install.sh derives REPO_ROOT from its own location, so a copied
+    macos/ plus a stub .venv is a complete environment for it."""
+    repo = tmp_path / "repo"
+    (repo / "macos").mkdir(parents=True)
+    for f in ("install.sh", "make_workflow.py", "compress-image.sh"):
+        shutil.copy(REPO / "macos" / f, repo / "macos" / f)
+    (repo / "macos" / "install.sh").chmod(0o755)
+
+    venv_bin = repo / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    vt = venv_bin / "vidtools"
+    vt.write_text("#!/bin/sh\nexit 0\n")       # present *and* runnable
+    vt.chmod(0o755)
+    (venv_bin / "python3").symlink_to(sys.executable)
+    return repo
+
+
+def _install_from(repo: Path, services: Path, extra_env=None):
+    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services), **(extra_env or {})}
+    return subprocess.run(["bash", str(repo / "macos" / "install.sh")],
+                          capture_output=True, text=True, env=env)
+
+
+def test_install_rejects_a_binary_that_does_not_run(fake_repo, services):
+    """Claim: deleting this lets the installer print "installed:" over a corpse.
+
+    `-x` proves a file is executable, not that it imports. A venv whose package
+    directory had gone missing passed that check, so the installer reported
+    success and the failure surfaced later as an empty Automator dialog."""
+    (fake_repo / ".venv" / "bin" / "vidtools").write_text(
+        "#!/bin/sh\necho 'ModuleNotFoundError' >&2\nexit 1\n")
+    (fake_repo / ".venv" / "bin" / "vidtools").chmod(0o755)
+
+    r = _install_from(fake_repo, services)
+    assert r.returncode != 0, "installer accepted a binary that cannot run"
+    assert not (services / f"{NAME}.workflow").exists(), "broken bundle installed"
+
+
+def test_failed_generation_leaves_the_previous_bundle_intact(fake_repo, services):
+    """Claim: deleting this lets a mid-install failure destroy a working action.
+
+    The old sequence was rm -rf, mkdir, then generate. Anything that failed
+    during generation left no bundle at all and no way back."""
+    assert _install_from(fake_repo, services).returncode == 0
+    contents = services / f"{NAME}.workflow" / "Contents"
+    before = {f.name: f.read_bytes() for f in contents.iterdir()}
+
+    (fake_repo / "macos" / "make_workflow.py").write_text(
+        "import sys\nsys.exit('generation blew up')\n")
+    r = _install_from(fake_repo, services)
+
+    assert r.returncode != 0, "install reported success despite a failed build"
+    after = {f.name: f.read_bytes() for f in contents.iterdir()}
+    assert after == before, "a failed install destroyed the working bundle"
+
+
+def test_install_does_not_depend_on_python3_from_path(fake_repo, services, tmp_path):
+    """Claim: deleting this lets the install bind to whatever python3 PATH
+    happens to surface -- which on this machine is a user-local 3.14, not the
+    venv's. The venv is already a hard precondition, so its python is the one
+    guaranteed to exist."""
+    shadow = tmp_path / "shadow"
+    shadow.mkdir()
+    (shadow / "python3").write_text("#!/bin/sh\necho 'wrong python' >&2\nexit 1\n")
+    (shadow / "python3").chmod(0o755)
+
+    r = _install_from(fake_repo, services,
+                      extra_env={"PATH": f"{shadow}:{os.environ['PATH']}"})
+    assert r.returncode == 0, f"install used PATH python3: {r.stderr}"
+    assert (services / f"{NAME}.workflow" / "Contents" / "document.wflow").exists()
 
 
 def test_uninstall_removes_the_bundle(services):

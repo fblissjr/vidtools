@@ -25,16 +25,38 @@ set -uo pipefail
 VIDTOOLS="@VIDTOOLS_BIN@"
 OSASCRIPT=/usr/bin/osascript
 
+# " and \ are syntax inside an AppleScript string literal. An unescaped one does
+# not garble the dialog -- it makes the whole -e argument a syntax error, so
+# nothing is displayed at all. That is the worst available failure for the code
+# path whose only job is reporting failure, and it became reachable the moment
+# these messages started carrying error text and filenames rather than literals.
+# A raw newline is fine unescaped; "\n" is not, since the backslash is escaped
+# here before AppleScript ever sees it.
+_as_quote() {
+    printf '%s' "$1" | /usr/bin/sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
 notify() {
-    "$OSASCRIPT" -e "display notification \"$2\" with title \"$1\"" >/dev/null 2>&1
+    "$OSASCRIPT" -e \
+        "display notification \"$(_as_quote "$2")\" with title \"$(_as_quote "$1")\"" \
+        >/dev/null 2>&1
 }
 
 fail() {
-    "$OSASCRIPT" -e "display alert \"vidtools\" message \"$1\" as critical" >/dev/null 2>&1
+    "$OSASCRIPT" -e \
+        "display alert \"vidtools\" message \"$(_as_quote "$1")\" as critical" \
+        >/dev/null 2>&1
     exit 1
 }
 
+# -x proves the file is executable, not that it runs. A venv whose package
+# directory has gone missing still satisfies -x, and exits 1 on every call --
+# which is how this action came to report "Could not compress 1 file(s)" with
+# no cause attached. Check that it actually starts, and say what to do.
 [ -x "$VIDTOOLS" ] || fail "vidtools binary not found. Re-run macos/install.sh from the repo."
+"$VIDTOOLS" --help >/dev/null 2>&1 || fail \
+    "vidtools is installed but will not run. Run 'uv sync' in the repo, then re-run macos/install.sh."
+
 [ "$#" -gt 0 ] || exit 0
 
 # Preset labels are outcome-shaped ("Smallest", "Visually lossless") rather than
@@ -75,6 +97,7 @@ ok=0
 failed=0
 total_before=0
 total_after=0
+first_error=""
 
 for f in "$@"; do
     [ -f "$f" ] || continue
@@ -87,11 +110,15 @@ for f in "$@"; do
     out="$dir/${stem}_compressed"
 
     before=$(/usr/bin/stat -f%z "$f" 2>/dev/null || echo 0)
+    # Keep stderr rather than discarding it. Every diagnostic this tool emits on
+    # failure goes there, and routing it to /dev/null is why a dead venv reached
+    # the user as an alert naming no cause.
+    errfile=$(/usr/bin/mktemp -t vidtools-qa)
     # Ask where it wrote rather than rediscovering it. `compress` chooses the
     # extension, so the output path is not predictable from the input, and
     # globbing for it picks up a stale file from an earlier run that chose a
     # different format -- reporting a saving against the wrong file.
-    if report=$("$VIDTOOLS" compress "${ARGS[@]}" "$f" "$out" 2>/dev/null); then
+    if report=$("$VIDTOOLS" compress "${ARGS[@]}" "$f" "$out" 2>"$errfile"); then
         written=${${(M)${(f)report}:#wrote *}#wrote }
         after=$(/usr/bin/stat -f%z "$written" 2>/dev/null || echo 0)
         ok=$((ok + 1))
@@ -99,11 +126,22 @@ for f in "$@"; do
         total_after=$((total_after + after))
     else
         failed=$((failed + 1))
+        # Keep the first cause only. A dialog can carry one usefully, and a
+        # batch that fails generally fails the same way for every file.
+        if [ -z "$first_error" ]; then
+            first_error=$(/usr/bin/tail -n 3 "$errfile" | /usr/bin/tr '\n' ' ')
+        fi
     fi
+    /bin/rm -f "$errfile"
 done
 
 if [ "$ok" -eq 0 ]; then
-    fail "Could not compress ${failed} file(s)."
+    summary="Could not compress ${failed} file(s)."
+    if [ -n "$first_error" ]; then
+        summary="$summary
+$first_error"
+    fi
+    fail "$summary"
 fi
 
 if [ "$total_after" -gt 0 ]; then
