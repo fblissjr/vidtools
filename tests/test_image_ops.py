@@ -32,6 +32,32 @@ class TestResizeImage:
             assert img.width == 100
             assert img.height == 50  # aspect ratio preserved
 
+    def test_resize_by_max_edge_downscales(self, sample_image, tmp_path):
+        """max_edge caps the longest side. sample_image is 200x100."""
+        out = str(tmp_path / "resized.png")
+        resize_image(sample_image, out, max_edge=100)
+        with Image.open(out) as img:
+            assert img.size == (100, 50)
+
+    def test_resize_by_max_edge_never_upscales(self, sample_image, tmp_path):
+        """Claim: deleting this makes max_edge behave like -W/-H, which enlarge
+        unconditionally. The whole point of the mode is that it is a cap, so a
+        source already under it must come back untouched in size."""
+        out = str(tmp_path / "resized.png")
+        resize_image(sample_image, out, max_edge=1000)
+        with Image.open(out) as img:
+            assert img.size == (200, 100)
+
+    def test_resize_by_max_edge_uses_the_long_edge_on_portrait(self, tmp_path):
+        """Claim: deleting this lets max_edge be implemented as a width cap,
+        which is a no-op on tall images -- the ones that most need capping."""
+        src = str(tmp_path / "tall.png")
+        Image.new("RGB", (100, 400), (10, 20, 30)).save(src)
+        out = str(tmp_path / "tall_small.png")
+        resize_image(src, out, max_edge=200)
+        with Image.open(out) as img:
+            assert img.size == (50, 200)
+
     def test_resize_by_height(self, sample_image, tmp_path):
         out = str(tmp_path / "resized.png")
         resize_image(sample_image, out, height=50)

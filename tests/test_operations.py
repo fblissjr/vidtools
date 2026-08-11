@@ -27,6 +27,60 @@ class TestResizeVideoValidation:
             resize_video("input.mp4", "output.mp4")
 
 
+class TestResizeMaxEdge:
+    """`--max-edge N` caps the longest side and never enlarges a smaller source.
+
+    -W/-H/-p are all unconditional: `-H 720` on a 480p clip upscales it. That is
+    defensible for a verb the user typed, and wrong for a "make this smaller"
+    Finder preset applied to whatever was selected -- it would hand back a file
+    that is bigger than the original and no sharper. These pin the shape of the
+    expression that makes the cap one-directional; `test_integration.py` pins
+    that ffmpeg actually resolves it that way.
+    """
+
+    def _filter_of(self, cmd):
+        return cmd[cmd.index("-vf") + 1]
+
+    def test_clamps_both_axes_to_the_cap(self, capture_ffmpeg):
+        """min() on each axis is what makes the cap one-directional -- without it
+        force_original_aspect_ratio=decrease still scales a small input *up* to
+        fill the box."""
+        resize_video("in.mp4", "out.mp4", max_edge=1280)
+        f = self._filter_of(capture_ffmpeg[0])
+        assert "min(iw,1280)" in f and "min(ih,1280)" in f
+
+    def test_fits_inside_a_square_box_so_orientation_does_not_matter(self, capture_ffmpeg):
+        """A square cap plus decrease caps the *longest* edge whichever way the
+        video is turned. A bare height cap shrinks portrait phone video far more
+        than the same number does to landscape."""
+        resize_video("in.mp4", "out.mp4", max_edge=1280)
+        f = self._filter_of(capture_ffmpeg[0])
+        assert "force_original_aspect_ratio=decrease" in f
+
+    def test_forces_even_dimensions(self, capture_ffmpeg):
+        """yuv420p cannot store an odd dimension; the derived edge is arbitrary,
+        so this is reachable from ordinary inputs (1918x1080 at 1280)."""
+        resize_video("in.mp4", "out.mp4", max_edge=1280)
+        assert "force_divisible_by=2" in self._filter_of(capture_ffmpeg[0])
+
+    def test_honours_the_scaling_algorithm(self, capture_ffmpeg):
+        resize_video("in.mp4", "out.mp4", max_edge=720, algorithm="bicubic")
+        assert "flags=bicubic" in self._filter_of(capture_ffmpeg[0])
+
+    def test_takes_precedence_over_nothing_it_is_alone(self, capture_ffmpeg):
+        """max_edge is one of the mutually exclusive sizing modes, not a modifier
+        layered on top of -p/-W/-H, so it builds a scale filter by itself."""
+        resize_video("in.mp4", "out.mp4", max_edge=854)
+        cmd = capture_ffmpeg[0]
+        assert "-vf" in cmd and "min(iw,854)" in self._filter_of(cmd)
+
+    def test_still_strips_metadata_by_default(self, capture_ffmpeg):
+        """A new sizing mode is a new code path into the same op; the policy has
+        to hold on it too."""
+        resize_video("in.mp4", "out.mp4", max_edge=1280)
+        assert "-map_metadata" in capture_ffmpeg[0]
+
+
 class TestRotateVideoValidation:
     def test_raises_on_invalid_rotation(self):
         with pytest.raises(ValueError, match="Invalid rotation"):

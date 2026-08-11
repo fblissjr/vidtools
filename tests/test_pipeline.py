@@ -45,6 +45,32 @@ class TestPipelineValidation:
             ])
 
 
+class TestResizeMaxEdgeStep:
+    """The Finder video action runs through `pipeline`, not `resize`, so the
+    capped-resize mode has to exist on the pipeline step too. A flag that works
+    on the standalone verb and silently does nothing in a pipeline is the worse
+    failure of the two -- it produces output, just not resized."""
+
+    def test_max_edge_builds_the_clamped_scale_filter(self):
+        cmd = Pipeline("in.mp4", "out.mp4", [
+            PipelineStep("resize", {"max_edge": 1280}),
+        ]).build_command()
+        vf = cmd[cmd.index("-vf") + 1]
+        assert "min(iw,1280)" in vf and "min(ih,1280)" in vf
+        assert "force_original_aspect_ratio=decrease" in vf
+        assert "force_divisible_by=2" in vf
+
+    def test_max_edge_composes_with_a_terminal_convert(self):
+        """The preset shape the Quick Action actually uses: cap the size and set
+        the quality in one ffmpeg invocation."""
+        cmd = Pipeline("in.mp4", "out.mp4", [
+            PipelineStep("resize", {"max_edge": 1280}),
+            PipelineStep("convert", {"crf": 28}),
+        ]).build_command()
+        assert "min(iw,1280)" in cmd[cmd.index("-vf") + 1]
+        assert cmd[cmd.index("-crf") + 1] == "28"
+
+
 class TestBuildCommand:
     def test_resize_only(self):
         p = Pipeline("in.mp4", "out.mp4", [

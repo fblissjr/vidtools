@@ -7,10 +7,30 @@ Guidance for Claude Code working in this repository.
 vidtools is an FFmpeg + PIL + yt-dlp media processing CLI (`vidtools` / `vt` console scripts).
 
 A FastAPI + WebSocket web UI was removed in 0.16.0 — see CHANGELOG. There are
-two surfaces: the CLI, and a macOS Finder Quick Action (shipped 0.23.0) under
-`macos/`. The Quick Action embeds a `compress` invocation into its bundle at
-install time, so a CLI change to `compress` does not reach it until
+two surfaces: the CLI, and the macOS Finder Quick Actions (image shipped 0.23.0,
+video 0.29.0) under `macos/`. Each action embeds a `vidtools` invocation into
+its bundle at install time, so a CLI change does not reach it until
 `macos/install.sh` is re-run.
+
+**Two bundles, one installer.** `Compress Image` registers for `public.image`
+and calls `compress`; `Compress Video` registers for `public.movie` and calls
+`pipeline` / `convert --copy`. One bundle accepting both types would appear on
+every file and would have to guess at a mixed selection, which has no correct
+preset list. `make_workflow.py` is parameterised by `kind` (`image`/`video`);
+both identifier pairs were read off a Quick Action macOS itself ships
+(`/System/Library/Automator/Encode Media.action/.../Encode Selected Video
+Files.workflow`), not inferred — that bundle is the reference to diff against
+when anything about registration looks wrong.
+
+**The video action needs `@FFMPEG_DIR@` baked in; the image action does not.**
+Automator's PATH holds neither `/usr/local/bin` nor Homebrew's prefix. `compress`
+is pure PIL so the image action never noticed; every video preset shells out to
+ffmpeg on every file. `install.sh` resolves the directory of the `ffmpeg`
+symlink (not its target — a Homebrew bin entry survives version bumps, the
+Cellar path it points into does not) and passes it to the generator. With no
+ffmpeg found the video action is **skipped with a warning** and the image action
+still installs; blocking a Quick Action with no ffmpeg dependency over one that
+has it punishes the wrong user.
 
 Python >=3.14. Requires `ffmpeg` >= 5.1 and `yt-dlp` in PATH.
 
@@ -38,6 +58,7 @@ build. Only encoders and libass are affected.
 - **No `exit(1)` in library code.** Always raise `FfmpegError` (from `vidtools.progress`). The CLI entrypoint catches and exits.
 - **No stub handlers.** Only register CLI commands when the operation actually exists.
 - **Reuse helpers in `video_ops.py`**: `_add_faststart_if_mp4`, `_add_time_range_args`, `_apply_encode_options`, `_build_scale_filter`, `_build_transpose_filter`, `_escape_subtitle_path`, `_get_video_encoder`, `_TRANSPOSE_MAP`, `DEFAULT_VIDEO_CODEC`, `DEFAULT_AUDIO_CODEC`. Pipeline.py imports them — don't duplicate. Use `_apply_encode_options` for the standard `-c:v / -c:a / -crf|-q:v` block (handles `crf=0` correctly; raw `if crf:` does not).
+- **`_build_scale_filter` has four modes, and `max_edge` is the only one that can decline to act.** `-p`/`-W`/`-H` are unconditional targets; `--max-edge N` is a *cap* that never enlarges and fits inside a square box so it caps the longest edge whichever way the video is turned. Both properties are load-bearing for the Finder presets, which are applied to whatever was selected rather than to a file the user sized by hand: without the `min()` on each axis, `force_original_aspect_ratio=decrease` scales a small input *up* to fill the box; without the square box, "720p" cuts portrait phone video to 405x720 while leaving landscape at 1280x720. `force_divisible_by=2` is not decoration either — 1918x1080 capped at 1280 derives an odd height, and yuv420p cannot store one, so the encode fails outright.
 - All ffmpeg commands include `-y` to avoid interactive stalls.
 
 ## Architecture
@@ -164,13 +185,28 @@ vidtools pipeline in.mp4 out.mp4 trim --start 60 --end 90 resize -p 0.5 convert 
 uv run pytest tests/ -v
 ```
 
-17 test files plus `conftest.py`: operations, ytdlp, audio_ops, image_ops, imaging_contract, cli_image_paths, compress, dispatch, progress, pipeline, separation, integration, macos_workflow, macos_quick_action, subtitles, audio_probe, macos_install.
+18 test files plus `conftest.py`: operations, ytdlp, audio_ops, image_ops, imaging_contract, cli_image_paths, compress, dispatch, progress, pipeline, separation, integration, macos_workflow, macos_quick_action, macos_video_action, subtitles, audio_probe, macos_install.
 
-`test_macos_quick_action.py` runs the Quick Action *shell script* under its own
-shebang with stubbed `vidtools`/`osascript`. Executing by path rather than
-forcing `/bin/zsh` is deliberate — forcing the interpreter masks a regression to
-`/bin/bash`, which is 3.2.57 on macOS and dies on the one preset that passes no
-flags. macOS-only; skipped elsewhere.
+`test_macos_quick_action.py` (image) and `test_macos_video_action.py` (video)
+run the Quick Action *shell scripts* under their own shebang with stubbed
+`vidtools`/`osascript`/`ffmpeg`. Executing by path rather than forcing
+`/bin/zsh` is deliberate — forcing the interpreter masks a regression to
+`/bin/bash`, which is 3.2.57 on macOS and dies on a preset that passes no flags.
+macOS-only; skipped elsewhere.
+
+They are separate files rather than one parameterised harness because the
+scripts are separate installed artifacts with different contracts, and the image
+action's history is that each of its five defects lived in a different layer — a
+shared harness has to be right about all of them at once.
+
+**Two traps specific to driving zsh scripts from pytest:**
+
+- **`status` is read-only in zsh** (it is the spelled-out form of `$?`).
+  Assigning to it aborts the script outright. The video script uses `rc`.
+- **zsh sources its per-user env file for every invocation, scripts included.**
+  A dotfile setup that composes PATH there silently restores a full PATH
+  underneath any test that restricts it — which defeated both tests asserting
+  ffmpeg is absent. The harness points `ZDOTDIR` at an empty directory.
 
 `test_macos_workflow.py` asserts on the dicts `make_workflow.build_workflow` /
 `build_info_plist` return, plus its `main()` guards driven as a subprocess.
@@ -179,7 +215,9 @@ flags. macOS-only; skipped elsewhere.
 should set it) and checks bundle *identity* across a reinstall, which is the one
 thing a dict assertion cannot see. It builds a throwaway repo copy (`fake_repo`)
 for the failure cases, so a test can break the generator without touching the
-real tree.
+real tree. It also pins that the two bundles register for *different* file types
+and that a fault in the video build leaves the image action installed — they are
+independent bundles and must fail independently.
 
 `make_workflow.main()` **refuses to generate when `@VIDTOOLS_BIN@` is absent**.
 `str.replace` on a string without the token is a silent no-op that emits a
@@ -204,12 +242,22 @@ no longer existed — the action was correct and had nothing to call). The
 pattern to avoid is testing the layer just touched and calling the feature
 verified — check the OS's view, per the section above.
 
+**Mutation-test any new claim about these scripts.** Building the video action
+meant writing ten deliberate defects back into it and confirming each went red.
+Two of the ten did not: one was a real bug in the script (`status=` under zsh),
+and one was a test that located the temp file by a marker its own mutation
+removed, so it passed while blind to the defect it named. A shell script driven
+through stubs has more ways to pass vacuously than Python does — the stub can go
+inert and the assertions still hold.
+
 The fifth is the reason **`-x` is not an installability check**. It proves a
 file is executable, not that it imports; a broken editable install satisfies it
-and exits 1 on every call. Both `install.sh` and the embedded script now run
+and exits 1 on every call. Both `install.sh` and the embedded scripts now run
 `"$BIN" --help` as a pre-flight and refuse rather than deferring the failure to
 right-click time. Note the probe is `--help`: `vidtools` has **no `--version`
-flag**, so a smoke check using one would fail always and unconditionally.
+flag**, so a smoke check using one would fail always and unconditionally. The
+video script adds a second pre-flight for the same reason — `command -v ffmpeg`,
+since the baked directory goes stale if ffmpeg is later moved or unlinked.
 
 Failure reporting in the Quick Action carries the first failure's stderr into
 the alert, which means alert text is now attacker-shaped (error output,
@@ -229,15 +277,27 @@ Both markers are registered in `pyproject.toml` under `--strict-markers`, so a t
 
 Everything else mocks `run_ffmpeg`.
 
-### Verify the Quick Action actually registered
+### Verify the Quick Actions actually registered
 
 ```bash
 SERVICES=$HOME/Library/Services   # path-privacy: ignore -- the OS decides where Quick Actions live
 
-/System/Library/CoreServices/pbs -dump_pboard | grep 'Compress Image'   # registered with the services DB
-plutil -lint "$SERVICES/Compress Image.workflow"/Contents/*             # both plists parse
-plutil -p <a working .workflow>/Contents/document.wflow                 # diff against one Automator wrote
+for n in 'Compress Image' 'Compress Video'; do
+  /System/Library/CoreServices/pbs -dump_pboard | grep "$n"   # in the services DB
+  plutil -lint "$SERVICES/$n.workflow"/Contents/*             # both plists parse
+done
+
+# Diff against one Automator wrote. macOS ships the exact video analogue:
+plutil -p '/System/Library/Automator/Encode Media.action/Contents/Resources/Encode Selected Video Files.workflow/Contents/Resources/document.wflow'
 ```
+
+The strongest end-to-end check is to pull `COMMAND_STRING` out of the
+*installed* `document.wflow` and run that (not the repo copy) against a real
+file under `env -i PATH=/usr/bin:/bin ZDOTDIR=<empty dir>`, with `osascript`
+stubbed to return a preset. That is the only way to exercise the baked
+`@VIDTOOLS_BIN@` / `@FFMPEG_DIR@` paths under something resembling Automator's
+environment — a run from a normal shell has ffmpeg on PATH and proves nothing
+about the bake.
 
 `install.sh` builds into a staging directory alongside the target and swaps it in, rather than deleting the installed bundle and generating in its place — the old order destroyed a working action before knowing whether the replacement would build. The swap is still a directory *replace*, not an overwrite: rewriting files in place leaves the bundle directory's mtime unchanged, so macOS keeps its cached registration and the action silently drops out of System Settings -> Login Items & Extensions -> Finder while still working from the right-click menu.
 

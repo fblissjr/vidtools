@@ -59,6 +59,16 @@ def _video_width(path: str) -> int:
     return int(out)
 
 
+def _video_dims(path: str) -> tuple[int, int]:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    w, h = out.split(",")
+    return int(w), int(h)
+
+
 @pytest.fixture(scope="module")
 def media(tmp_path_factory):
     """Generate a 2s A/V clip, a still image, and an audio file once per module."""
@@ -157,6 +167,68 @@ class TestResizeReal:
         out = str(tmp_path / "r.mp4")
         resize_video(media["clip"], out, percentage=0.5)
         assert _video_width(out) == 160  # 320 * 0.5
+
+
+class TestResizeMaxEdgeReal:
+    """`--max-edge` is an ffmpeg *expression*, so only ffmpeg can confirm it.
+
+    The shape assertions in test_operations.py check the string we build. They
+    would pass just as happily on an expression that silently upscales, picks
+    the wrong axis on portrait, or emits an odd dimension the encoder then
+    refuses. Every case below was checked by hand against ffmpeg 8.1.2 first.
+    """
+
+    @staticmethod
+    def _clip(tmp_path, name, size):
+        p = str(tmp_path / name)
+        _run(["ffmpeg", "-y", "-f", "lavfi", "-i",
+              f"testsrc=duration=0.5:rate=10:size={size}", "-pix_fmt", "yuv420p", p])
+        return p
+
+    def test_downscales_landscape_to_the_cap(self, tmp_path):
+        src = self._clip(tmp_path, "l.mp4", "640x360")
+        out = str(tmp_path / "o.mp4")
+        resize_video(src, out, max_edge=320)
+        assert _video_dims(out) == (320, 180)
+
+    def test_caps_the_long_edge_of_portrait_rather_than_the_height(self, tmp_path):
+        """Claim: deleting this lets the cap be implemented as a height cap.
+
+        A height cap reads correctly on landscape and mangles portrait -- phone
+        video at `-H 720` comes out 405x720, a far harsher cut than the same
+        number does to a landscape clip. Right-clicking a video should not mean
+        something different depending on which way the phone was held."""
+        src = self._clip(tmp_path, "p.mp4", "360x640")
+        out = str(tmp_path / "o.mp4")
+        resize_video(src, out, max_edge=320)
+        assert _video_dims(out) == (180, 320)
+
+    def test_never_upscales(self, tmp_path):
+        """Claim: deleting this lets a "Small - 720p" preset hand back a file
+        bigger than the original and no sharper. force_original_aspect_ratio
+        alone does exactly that -- it fills the box in both directions."""
+        src = self._clip(tmp_path, "s.mp4", "320x240")
+        out = str(tmp_path / "o.mp4")
+        resize_video(src, out, max_edge=1280)
+        assert _video_dims(out) == (320, 240)
+
+    def test_a_cap_equal_to_the_source_is_a_no_op(self, tmp_path):
+        src = self._clip(tmp_path, "e.mp4", "640x360")
+        out = str(tmp_path / "o.mp4")
+        resize_video(src, out, max_edge=640)
+        assert _video_dims(out) == (640, 360)
+
+    def test_odd_derived_edge_is_rounded_to_even(self, tmp_path):
+        """Claim: deleting force_divisible_by=2 makes this raise rather than
+        resize. 1918x1080 capped at 1280 derives a fractional height, and
+        yuv420p cannot store an odd dimension -- so the encoder fails outright
+        on a perfectly ordinary input."""
+        src = self._clip(tmp_path, "odd.mp4", "1918x1080")
+        out = str(tmp_path / "o.mp4")
+        resize_video(src, out, max_edge=1280)
+        w, h = _video_dims(out)
+        assert (w % 2, h % 2) == (0, 0), f"{w}x{h} is not encodable as yuv420p"
+        assert max(w, h) == 1280
 
 
 class TestAudioVerbRemuxReal:

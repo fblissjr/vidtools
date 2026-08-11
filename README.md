@@ -39,6 +39,7 @@ vidtools convert clip.mp4 audio.mp3                     # video -> extract audio
 vidtools convert photo.png photo.webp -q 90            # image convert (quality 1-100)
 vidtools resize clip.mp4 out.mp4 -p 0.5                # video or image
 vidtools resize photo.png small.png -W 800
+vidtools resize clip.mp4 out.mp4 --max-edge 1280       # cap; never enlarges
 vidtools crop in.png out.png -W 200 -H 200 -x 50 -y 50 # video or image
 vidtools trim --start 60 --end 90 in.mp4 out.mp4       # video or audio (alias: cut)
 vidtools trim --start 0 --end 30 song.mp3 clip.mp3
@@ -220,50 +221,106 @@ vidtools convert in.mp4 out.mp4 --hwaccel        # macOS: uses VideoToolbox
 vidtools cut in.mp4 out.mp4 --start 0 --end 60 --accurate --hwaccel
 ```
 
-## Finder Quick Action (macOS)
+## Finder Quick Actions (macOS)
 
-Right-click images in Finder, pick a result, get compressed copies alongside
-the originals.
+Right-click images or videos in Finder, pick a result, get compressed copies
+alongside the originals.
 
 ```bash
-bash macos/install.sh              # install
-bash macos/install.sh --uninstall  # remove
+bash macos/install.sh              # install both
+bash macos/install.sh --uninstall  # remove both
 ```
 
-One menu entry that opens a preset list, rather than one entry per operation --
-the convention macOS's own Convert Image follows, and it keeps the Quick Actions
-menu from filling up. Presets are outcome-shaped: *Smallest, sized for AI
-vision*, *Balanced*, *Visually lossless*, *Lossless*, *Balanced but keep
-metadata*.
+Two entries, each offering a preset list:
 
-The bundle is generated at install time rather than checked in: the embedded
-script needs your machine's absolute path to the `vidtools` binary, and a
-`.wflow` is an opaque plist. The reviewable part -- `macos/compress-image.sh` --
-stays in plain sight, and `macos/make_workflow.py` builds the plist so it can be
-tested.
+| | presets |
+|---|---|
+| **Compress Image** | *Smallest, sized for AI vision* (WebP or AVIF) / *Balanced* / *Visually lossless* / *Lossless* / *Balanced, keep metadata* |
+| **Compress Video** | *Smallest — 480p* / *Small — 720p* / *Balanced — 1080p* / *Original size, just compress* / *Strip metadata only — no re-encode* / *Balanced — 1080p, keep metadata* |
 
-**Python changes reach the action immediately** (the venv install is editable),
-but the shell script is embedded into the bundle at install time -- editing
-`macos/compress-image.sh` needs a re-run of `install.sh` to take effect. Moving
-the repo also breaks the action, which fails with a visible alert rather than
-doing nothing silently.
+A preset list rather than one menu entry per operation — the convention macOS's
+own Convert Image follows, and it keeps the Quick Actions menu from filling up.
+Labels are outcome-shaped because someone right-clicking a file is choosing a
+result, not a flag.
 
-The editable install is also the action's most likely failure. If the venv stops
-resolving the package -- a moved repo, an interrupted `uv sync`, a missing
-`vidtools/` -- the console script stays on disk and exits non-zero on every
-call. Both `install.sh` and the action itself check that the binary actually
-starts, so this surfaces as a named error telling you to re-run `uv sync`,
-rather than as a compression that silently does nothing. When a *file* fails,
-the alert carries the first error from `compress` rather than only a count.
+Two bundles rather than one accepting both types, so each entry appears only on
+files it can act on and neither script has to cope with a mixed selection —
+which has no correct preset list.
 
-`install.sh` builds the bundle in a staging directory and swaps it in, so a
-failed install leaves the previous working action untouched.
+**Everything strips GPS, camera and timestamp metadata except the explicit
+*keep metadata* preset.** For video that is `-map_metadata -1`, which is
+all-or-nothing at the container level: the *keep* preset keeps everything,
+location included. See [Metadata: what gets stripped](#metadata-what-gets-stripped).
+
+### Video specifics
+
+The resolutions are **caps, not targets** — a clip already smaller than the
+preset is passed through at its own size rather than enlarged. They cap the
+*longest* edge, so portrait phone video and landscape footage get the same
+treatment (`--max-edge`, below). Re-encodes always write `.mp4` with libx264 at
+a fixed CRF.
+
+*Strip metadata only* is the odd one out: a stream copy, so it is effectively
+instant, pixel-identical, and keeps the source container. It is what you want
+when the file is fine and only its metadata is not.
+
+Encodes are written to a temp file beside the destination and moved into place
+on success, so an interrupted encode never leaves a half-written file under the
+real name.
+
+libx264 rather than VideoToolbox, measured on an M2 Ultra with ffmpeg 8.1.2
+(20s of 1080p down to 720p): x264 took 1.4s for 1.53 MB, `h264_videotoolbox`
+0.9s for 5.07 MB. Hardware encoding buys almost nothing at this scale and costs
+3x the file size, and CRF holds quality steady across content where a fixed
+bitrate cannot.
+
+### How the bundles are built
+
+Generated at install time rather than checked in: the embedded scripts need
+your machine's absolute paths — to the `vidtools` binary, and for the video
+action to ffmpeg's directory — and a `.wflow` is an opaque plist that reviews
+badly. The reviewable parts (`macos/compress-image.sh`,
+`macos/compress-video.sh`) stay in plain sight, and `macos/make_workflow.py`
+builds the plists so they can be tested.
+
+**Python changes reach the actions immediately** (the venv install is editable),
+but the shell scripts are embedded into the bundles at install time — editing
+one needs a re-run of `install.sh` to take effect. Moving the repo also breaks
+both actions, which fail with a visible alert rather than doing nothing
+silently.
+
+**The video action needs ffmpeg's directory baked in.** Automator runs with a
+minimal PATH containing neither `/usr/local/bin` nor Homebrew's prefix, and
+every video preset shells out to ffmpeg on every file. `install.sh` resolves it
+from your PATH at install time — so install ffmpeg *before* running it, and
+re-run the installer if you later move or change ffmpeg. With no ffmpeg found,
+the video action is skipped with a warning and the image action still installs;
+it has no ffmpeg dependency at all.
+
+The editable install is the actions' most likely failure. If the venv stops
+resolving the package — a moved repo, an interrupted `uv sync`, a missing
+`vidtools/` — the console script stays on disk and exits non-zero on every
+call. Both `install.sh` and the actions themselves check that the binary
+actually starts, so this surfaces as a named error telling you to re-run
+`uv sync`, rather than as a compression that silently does nothing. When a
+*file* fails, the alert carries the first error rather than only a count.
+
+`install.sh` builds each bundle in a staging directory and swaps it in, so a
+failed install leaves the previous working action untouched, and the two
+actions fail independently.
 
 Automator rather than a native app, so there is no code-signing or notarisation
-step. The trade is that AppleScript cannot draw a multi-control panel, so it is
-one preset list instead of the Format / Size / Preserve Metadata trio. If that
-becomes limiting, `macos/compress-image.sh` is what a native front end would
-call.
+step. The trade is that AppleScript cannot draw a multi-control panel, so each
+is one preset list instead of a Format / Size / Preserve Metadata trio. If that
+becomes limiting, the shell scripts are what a native front end would call.
+
+`install.sh` printing `installed:` only means files were written — macOS
+silently ignores a bundle whose metadata is incomplete. The services database
+is the only real check:
+
+```bash
+/System/Library/CoreServices/pbs -dump_pboard | grep 'Compress Video'
+```
 
 ## Architecture
 

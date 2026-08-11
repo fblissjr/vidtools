@@ -52,15 +52,40 @@ def _add_time_range_args(command: list, start_time=None, end_time=None, duration
         command.extend(["-t", str(duration)])
 
 
-def _build_scale_filter(percentage=None, width=None, height=None, algorithm="lanczos") -> str:
-    """Build the ffmpeg `scale=...` filter expression."""
+def _build_scale_filter(percentage=None, width=None, height=None, algorithm="lanczos",
+                        max_edge=None) -> str:
+    """Build the ffmpeg `scale=...` filter expression.
+
+    `max_edge` is a *cap*, not a target, and differs from the other three modes
+    in both directions it can refuse to move:
+
+    - It never enlarges. `-W`/`-H`/`-p` are unconditional, which is right for a
+      verb the user typed against a file they picked. It is wrong for a preset
+      applied to whatever happened to be selected in Finder, where "make this
+      smaller" must not hand back an upscaled file that is larger than the
+      original and no sharper. The `min()` on each axis is what does this --
+      `force_original_aspect_ratio=decrease` alone still scales a small input
+      *up* to fill the box.
+    - It caps the longest edge whichever way the video is turned, by fitting
+      inside a square box. A plain height cap reads correctly on landscape and
+      mangles portrait: phone video at `-H 720` comes out 405x720, a far harsher
+      cut than the same number applies to a landscape clip.
+
+    `force_divisible_by=2` is not decoration. The derived edge is arbitrary, so
+    an ordinary input (1918x1080 capped at 1280) yields an odd height, and
+    yuv420p cannot store one -- the encoder fails rather than rounding.
+    """
+    if max_edge:
+        return (f"scale=w='min(iw,{max_edge})':h='min(ih,{max_edge})'"
+                f":force_original_aspect_ratio=decrease:force_divisible_by=2"
+                f":flags={algorithm}")
     if percentage:
         return f"scale=iw*{percentage}:ih*{percentage}:flags={algorithm}"
     if width:
         return f"scale={width}:-2:flags={algorithm}"
     if height:
         return f"scale=-2:{height}:flags={algorithm}"
-    raise ValueError("Must specify percentage, width, or height")
+    raise ValueError("Must specify percentage, width, height, or max_edge")
 
 
 def _build_transpose_filter(rotation) -> str:
@@ -153,9 +178,9 @@ def cut_video(input_file, output_file, start_time=None, end_time=None, duration=
 
 
 def resize_video(input_file, output_file, percentage=None, width=None, height=None,
-                 algorithm="lanczos", preserve_metadata=False):
+                 algorithm="lanczos", preserve_metadata=False, max_edge=None):
     """Resizes a video using ffmpeg scale filter."""
-    scale_filter = _build_scale_filter(percentage, width, height, algorithm)
+    scale_filter = _build_scale_filter(percentage, width, height, algorithm, max_edge)
     command = ["ffmpeg", "-y", "-i", input_file, "-vf", scale_filter, "-c:a", "copy"]
     _add_metadata_policy(command, preserve_metadata)
     _add_faststart_if_mp4(command, output_file)

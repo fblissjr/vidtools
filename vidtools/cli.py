@@ -264,6 +264,10 @@ Examples:
     grp.add_argument("-p", "--percentage", type=float, help="Scale by factor (e.g. 0.5)")
     grp.add_argument("-W", "--width", type=int, help="Target width")
     grp.add_argument("-H", "--height", type=int, help="Target height")
+    grp.add_argument("--max-edge", dest="max_edge", type=int, metavar="N",
+                     help="Cap the longest side at N. Never enlarges, and works the\n"
+                          "same on portrait and landscape -- unlike -W/-H, which are\n"
+                          "unconditional and orientation-dependent.")
     resize.add_argument(
         "--algorithm", default="lanczos",
         choices=["neighbor", "fast_bilinear", "bilinear", "bicubic", "experimental",
@@ -275,11 +279,13 @@ Examples:
     def _resize_video(args):
         operations.resize_video(args.input, args.output, percentage=args.percentage,
                                 width=args.width, height=args.height, algorithm=args.algorithm,
-                                preserve_metadata=args.preserve_metadata)
+                                preserve_metadata=args.preserve_metadata,
+                                max_edge=args.max_edge)
     def _resize_image(args):
         image_ops.resize_image(args.input, args.output, percentage=args.percentage,
                                width=args.width, height=args.height,
-                               preserve_metadata=args.preserve_metadata)
+                               preserve_metadata=args.preserve_metadata,
+                               max_edge=args.max_edge)
     resize.set_defaults(func=_make_smart("resize", video=_resize_video, image=_resize_image))
 
     # ---------------------------------------------------------------- crop ----
@@ -947,6 +953,7 @@ def _make_step_parser(op: str) -> argparse.ArgumentParser:
         p.add_argument("-p", "--percentage", type=float)
         p.add_argument("-W", "--width", type=int)
         p.add_argument("-H", "--height", type=int)
+        p.add_argument("--max-edge", dest="max_edge", type=int)
         p.add_argument("--algorithm", default="lanczos")
     elif op == "crop":
         p.add_argument("-W", "--width", type=int, required=True)

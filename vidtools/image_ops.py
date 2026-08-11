@@ -319,8 +319,14 @@ def _save_image(img: Image.Image, output_file: str, quality: int | None = None,
 
 def resize_image(input_file: str, output_file: str, percentage: float | None = None,
                  width: int | None = None, height: int | None = None,
-                 algorithm: str = "lanczos", preserve_metadata: bool = False):
-    """Resize an image by percentage, width, or height (preserving aspect ratio)."""
+                 algorithm: str = "lanczos", preserve_metadata: bool = False,
+                 max_edge: int | None = None):
+    """Resize an image by percentage, width, height, or a longest-edge cap.
+
+    `max_edge` mirrors the video op: it caps the longest side and never enlarges,
+    so it is safe to apply to a mixed selection. See `video_ops._build_scale_filter`
+    for why a cap has to be orientation-agnostic rather than a height cap.
+    """
     resampling = {
         "lanczos": Image.Resampling.LANCZOS,
         "bilinear": Image.Resampling.BILINEAR,
@@ -329,7 +335,14 @@ def resize_image(input_file: str, output_file: str, percentage: float | None = N
     }.get(algorithm, Image.Resampling.LANCZOS)
 
     img = _open_image(input_file)
-    if percentage:
+    if max_edge:
+        longest = max(img.width, img.height)
+        # A source already inside the cap comes back at its own size. Scaling it
+        # up would be the one thing a cap must never do.
+        scale = min(1.0, max_edge / longest)
+        new_w = max(1, int(img.width * scale))
+        new_h = max(1, int(img.height * scale))
+    elif percentage:
         # Clamp to 1px: scaling a very small image down rounds to zero, and PIL
         # rejects a zero dimension. Found on a real 1x1 image at 25%.
         new_w = max(1, int(img.width * percentage))
@@ -341,7 +354,7 @@ def resize_image(input_file: str, output_file: str, percentage: float | None = N
         new_h = height
         new_w = max(1, int(img.width * (height / img.height)))
     else:
-        raise ValueError("You must specify a percentage, width, or height.")
+        raise ValueError("You must specify a percentage, width, height, or max_edge.")
 
     result = _prepare_for_resample(img).resize((new_w, new_h), resampling)
     result.info = img.info

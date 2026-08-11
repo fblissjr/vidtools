@@ -12,6 +12,7 @@ macOS-only; these shell out to the real script.
 
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,7 @@ pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="macOS installe
 REPO = Path(__file__).resolve().parents[1]
 INSTALL = REPO / "macos" / "install.sh"
 NAME = "Compress Image"
+VIDEO_NAME = "Compress Video"
 
 
 def _install(services: Path):
@@ -90,6 +92,74 @@ def test_embedded_script_has_the_binary_substituted(services):
     assert script.startswith("#!/bin/zsh")
 
 
+# ------------------------------------------------------- both Quick Actions
+#
+# The video action is a second bundle, so everything the installer does it now
+# has to do twice -- and the two are not symmetric: the video one additionally
+# needs ffmpeg's directory baked in, and is the only one that can be skipped.
+
+def test_install_creates_both_bundles(services):
+    r = _install(services)
+    assert r.returncode == 0, r.stderr
+    for name in (NAME, VIDEO_NAME):
+        contents = services / f"{name}.workflow" / "Contents"
+        assert (contents / "document.wflow").exists(), f"{name}: no workflow"
+        assert (contents / "Info.plist").exists(), f"{name}: no Info.plist"
+
+
+def test_the_two_bundles_register_for_different_file_types(services):
+    """Claim: deleting this lets both bundles register for public.image.
+
+    The video action would then offer video presets when right-clicking a photo
+    and never appear on an actual video -- installed, lint-clean, and useless."""
+    _install(services)
+    kinds = {}
+    for name in (NAME, VIDEO_NAME):
+        info = plistlib.loads(
+            (services / f"{name}.workflow" / "Contents" / "Info.plist").read_bytes())
+        kinds[name] = info["NSServices"][0]["NSSendFileTypes"]
+    assert kinds[NAME] == ["public.image"]
+    assert kinds[VIDEO_NAME] == ["public.movie"]
+
+
+def test_video_bundle_has_a_real_ffmpeg_directory_baked_in(services):
+    """Claim: deleting this ships a video action that cannot find ffmpeg.
+
+    Automator's PATH holds neither /usr/local/bin nor Homebrew's, and unlike
+    `compress` every video preset shells out to ffmpeg on every file."""
+    _install(services)
+    wf = plistlib.loads(
+        (services / f"{VIDEO_NAME}.workflow" / "Contents" / "document.wflow").read_bytes())
+    script = wf["actions"][0]["action"]["ActionParameters"]["COMMAND_STRING"]
+    assert "@FFMPEG_DIR@" not in script, "placeholder left unsubstituted"
+    m = re.search(r'^FFMPEG_DIR="([^"]*)"', script, re.M)
+    assert m, "no FFMPEG_DIR assignment in the installed script"
+    baked = Path(m.group(1))
+    assert (baked / "ffmpeg").exists(), f"baked a directory with no ffmpeg in it: {baked}"
+
+
+def test_uninstall_removes_both_bundles(services):
+    _install(services)
+    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services)}
+    r = subprocess.run(["bash", str(INSTALL), "--uninstall"],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    for name in (NAME, VIDEO_NAME):
+        assert not (services / f"{name}.workflow").exists(), f"{name} survived uninstall"
+
+
+def test_both_bundles_are_replaced_not_overwritten_on_reinstall(services):
+    """The original regression, now applied to both. Rewriting files in place
+    leaves the bundle directory's identity unchanged, which is what macOS keys
+    its re-scan on."""
+    _install(services)
+    before = {n: (services / f"{n}.workflow").stat().st_ino for n in (NAME, VIDEO_NAME)}
+    _install(services)
+    for n in (NAME, VIDEO_NAME):
+        assert (services / f"{n}.workflow").stat().st_ino != before[n], \
+            f"{n}: bundle directory reused; macOS keeps its cached registration"
+
+
 @pytest.fixture
 def fake_repo(tmp_path):
     """A minimal repo copy, so a test can break the build without touching the
@@ -97,7 +167,8 @@ def fake_repo(tmp_path):
     macos/ plus a stub .venv is a complete environment for it."""
     repo = tmp_path / "repo"
     (repo / "macos").mkdir(parents=True)
-    for f in ("install.sh", "make_workflow.py", "compress-image.sh"):
+    for f in ("install.sh", "make_workflow.py", "compress-image.sh",
+              "compress-video.sh"):
         shutil.copy(REPO / "macos" / f, repo / "macos" / f)
     (repo / "macos" / "install.sh").chmod(0o755)
 
@@ -189,6 +260,46 @@ def test_install_does_not_depend_on_python3_from_path(fake_repo, services, tmp_p
                       extra_env={"PATH": f"{shadow}:{os.environ['PATH']}"})
     assert r.returncode == 0, f"install used PATH python3: {r.stderr}"
     assert (services / f"{NAME}.workflow" / "Contents" / "document.wflow").exists()
+
+
+def test_missing_ffmpeg_skips_the_video_action_but_still_installs_the_image_one(
+        fake_repo, services):
+    """Claim: deleting this either ships a video action that fails on every
+    file, or refuses to install the image action over a dependency it does not
+    have.
+
+    `compress` is pure PIL, so the image action needs no ffmpeg at all.
+    Blocking it because the *video* prerequisites are missing punishes the
+    wrong user; installing a video action with no ffmpeg to call ships a
+    right-click that always errors. Skip the one, install the other, say so."""
+    # The system dirs only -- enough to find bash and the coreutils the script
+    # calls, and neither holds an ffmpeg (Homebrew's and the static builds live
+    # elsewhere). An empty PATH would fail for the wrong reason: no `bash`.
+    r = _install_from(fake_repo, services, extra_env={"PATH": "/usr/bin:/bin"})
+
+    assert r.returncode == 0, f"refused to install anything: {r.stderr}"
+    assert (services / f"{NAME}.workflow").exists(), "image action was not installed"
+    assert not (services / f"{VIDEO_NAME}.workflow").exists(), \
+        "installed a video action with no ffmpeg for it to call"
+    assert "ffmpeg" in (r.stderr + r.stdout).lower(), "skipped the video action silently"
+
+
+def test_a_failed_video_build_leaves_the_image_action_installed(fake_repo, services):
+    """Claim: deleting this lets a fault in the second action take out the
+    first. They are independent bundles and must fail independently."""
+    assert _install_from(fake_repo, services).returncode == 0
+    contents = services / f"{NAME}.workflow" / "Contents"
+    before = {f.name: f.read_bytes() for f in contents.iterdir()}
+
+    # Break only the video script, by removing the placeholder the generator
+    # refuses to proceed without.
+    (fake_repo / "macos" / "compress-video.sh").write_text(
+        "#!/bin/zsh\necho no placeholder\n")
+    r = _install_from(fake_repo, services)
+
+    assert r.returncode != 0, "reported success despite a failed video build"
+    after = {f.name: f.read_bytes() for f in contents.iterdir()}
+    assert after == before, "a failed video build damaged the image action"
 
 
 def test_uninstall_removes_the_bundle(services):

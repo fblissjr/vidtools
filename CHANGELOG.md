@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.29.0
+
+### Added
+- **Finder Quick Action for video** (`Compress Video`). Right-click videos, pick a result, get compressed copies alongside the originals. Six presets: *Smallest — 480p* / *Small — 720p* / *Balanced — 1080p* / *Original size, just compress* / *Strip metadata only — no re-encode* / *Balanced — 1080p, keep metadata*. Verified end to end through the installed bundle: a 1080p clip came out 720p, 8.4x smaller, with title, comment and GPS gone.
+  - **A second bundle, not a second preset list.** One bundle accepting both `public.image` and `public.movie` would show the entry on every file and would have to guess at a mixed selection, which has no correct preset list. Two bundles means each entry appears only where it applies.
+  - **`--max-edge` exists because the presets would otherwise upscale.** `-W`/`-H`/`-p` are unconditional — right for a verb the user typed against a file they picked, wrong for a preset applied to whatever was selected, where "make this smaller" must not return a file that is *larger* than the original and no sharper. The cap also fits inside a square box rather than capping height, so portrait and landscape get the same treatment: a plain `-H 720` reads correctly on landscape and cuts portrait phone video to 405x720.
+  - `force_divisible_by=2` is not decoration. The derived edge is arbitrary, so an ordinary input (1918x1080 capped at 1280) yields an odd height, and yuv420p cannot store one — the encoder fails outright rather than rounding.
+  - *Strip metadata only* is a stream copy: instant, pixel-identical, and it keeps the source container. Copying an arbitrary codec into mp4 is not always legal, and the preset's whole point is to touch nothing but the metadata.
+  - Encodes are written to a temp file beside the destination and moved into place on success. Video encodes take minutes and are interruptible, so a partial file under the final name is a normal outcome rather than an exotic one — and it also makes the stale-output bug the image action shipped structurally impossible here rather than merely guarded.
+  - **libx264, not VideoToolbox.** Measured on an M2 Ultra with ffmpeg 8.1.2, 20s of 1080p down to 720p: x264 took 1.4s for 1.53 MB, `h264_videotoolbox` 0.9s for 5.07 MB. Hardware encoding buys almost nothing at this scale and costs 3x the size, and CRF holds quality steady across content where a fixed bitrate cannot.
+- **`resize --max-edge N`** on the `resize` verb and the `pipeline` resize step, for video and images alike. Caps the longest side, never enlarges, orientation-agnostic.
+- The video action bakes ffmpeg's directory into its PATH at install time. Automator's PATH contains neither `/usr/local/bin` nor Homebrew's prefix, so without this every preset fails on every file. The image action never needed it — `compress` is pure PIL — which is why this surfaced only now. With no ffmpeg on PATH the installer skips the video action with a warning and still installs the image one, rather than blocking a Quick Action that has no ffmpeg dependency over one that does.
+- `make_workflow.py` now refuses a *renamed* placeholder, not just a missing one. Substituting a token that is not there was already caught; a token nothing will substitute shipped as literal text. This is the gap the installer-side check provably cannot cover — it asserts `@VIDTOOLS_BIN@` is absent from the output, which a rename satisfies trivially.
+
+### Fixed
+- The two Quick Action bundles no longer share action UUIDs. They were literals from when only one bundle existed.
+
+### Testing
+- `tests/test_macos_video_action.py` drives the video script end to end with stubs, and every claim in it was verified by reintroducing the defect and confirming red. That caught two real problems: the script assigned to `status`, which is **read-only in zsh** (the spelled-out form of `$?`) and aborted the script outright; and a test that located the temp file by a marker its own mutation removed, so it passed while blind to the defect it claimed to catch.
+- The same mutation pass over the installer covers all eight of its claims.
+- The video test harness points `ZDOTDIR` at an empty directory. zsh sources its per-user env file for *every* invocation, scripts included, so a dotfile setup that composes PATH silently restored a full PATH underneath the two tests that assert ffmpeg is absent.
+
 ## 0.28.0
 
 ### Changed

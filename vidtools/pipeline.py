@@ -31,7 +31,8 @@ class PipelineStep:
 
 _FILTER_BUILDERS = {
     "resize": lambda p: _build_scale_filter(p.get("percentage"), p.get("width"),
-                                            p.get("height"), p.get("algorithm", "lanczos")),
+                                            p.get("height"), p.get("algorithm", "lanczos"),
+                                            p.get("max_edge")),
     "crop": lambda p: f"crop={p['width']}:{p['height']}:{p.get('x', 0)}:{p.get('y', 0)}",
     "rotate": lambda p: _build_transpose_filter(p["rotation"]),
     "sanitize": lambda p: f"crop={p['manual_crop']},noise=alls={p.get('noise', 6)}:allf=t+u",
