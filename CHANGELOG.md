@@ -17,6 +17,9 @@
 ### Fixed
 - The two Quick Action bundles no longer share action UUIDs. They were literals from when only one bundle existed.
 
+### Changed
+- **`install.sh` no longer deletes recursively.** It removed four directory trees with `rm -rf`, on paths built from variables, running against the real Services folder. Recursion bought nothing: every directory it removes — an installed bundle, a staging dir, a moved-aside backup — holds exactly the two files `make_workflow.py` generated. So removal is now `rm -f` on those named files followed by `rmdir`, which refuses any directory that still holds something and therefore cannot cascade. A bundle with a file the installer did not create is left standing and reported, where `rm -rf` would have taken it without a word. A containment check refuses any path outside the Services directory. The only deletions left anywhere in `macos/` are single named files and two `rmdir` calls.
+
 ### Fixed before release (review pass)
 Seven findings, all reproduced before acting on any of them. None shipped.
 

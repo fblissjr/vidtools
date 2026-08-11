@@ -31,12 +31,62 @@ SERVICES="${VIDTOOLS_SERVICES_DIR:-$HOME/Library/Services}"   # path-privacy: ig
 IMAGE_NAME="Compress Image"
 VIDEO_NAME="Compress Video"
 
+# Remove one of the bundle-shaped directories this script created -- an
+# installed bundle, a staging dir, or a moved-aside backup. All three hold the
+# same two generated files and nothing else.
+#
+# Deliberately NOT `rm -rf`. We know the exact contents, so recursion buys
+# nothing and only widens what a wrong path could destroy. `rmdir` refuses any
+# directory that still holds something, so this physically cannot cascade: an
+# unexpected file leaves the directory standing and is reported, rather than
+# being deleted sight-unseen. Reversing that trade would mean this script could
+# erase a bundle a user had put their own files in, to save one call.
+#
+# Returns non-zero if anything was left behind.
+remove_generated_bundle() {
+    local dir="$1"
+
+    [ -n "$dir" ] || return 0
+    [ -d "$dir" ] || return 0
+
+    # Nothing outside the Services directory we were pointed at, ever. Cheap
+    # insurance against a future edit that makes one of these paths computable
+    # to something else.
+    case "$dir" in
+        "$SERVICES"/*) ;;
+        *)
+            echo "refusing to remove '$dir': outside '$SERVICES'" >&2
+            return 1
+            ;;
+    esac
+
+    # The two files make_workflow.py writes, plus the one stray macOS is
+    # entitled to leave if the folder has been opened in Finder.
+    rm -f "$dir/Contents/document.wflow" \
+          "$dir/Contents/Info.plist" \
+          "$dir/Contents/.DS_Store" \
+          "$dir/.DS_Store" 2>/dev/null || true
+    rmdir "$dir/Contents" 2>/dev/null || true
+    rmdir "$dir" 2>/dev/null || true
+
+    [ ! -e "$dir" ]
+}
+
 if [ "${1:-}" = "--uninstall" ]; then
+    rc=0
     for name in "$IMAGE_NAME" "$VIDEO_NAME"; do
-        rm -rf "$SERVICES/$name.workflow"
-        echo "removed: $name"
+        bundle="$SERVICES/$name.workflow"
+        if [ ! -e "$bundle" ]; then
+            echo "not installed: $name"
+        elif remove_generated_bundle "$bundle"; then
+            echo "removed: $name"
+        else
+            echo "warning: '$bundle' holds files this script did not create." >&2
+            echo "         Left in place -- remove it by hand if you meant to." >&2
+            rc=1
+        fi
     done
-    exit 0
+    exit "$rc"
 fi
 
 # Prefer the project venv binary over PATH: Automator runs with a minimal PATH,
@@ -100,11 +150,11 @@ BUNDLE=""
 # restore below would be skipped exactly when it is needed. That also masks the
 # real exit status.
 cleanup() {
-    if [ -n "$STAGE" ]; then rm -rf "$STAGE" 2>/dev/null || true; fi
+    remove_generated_bundle "$STAGE" || true
     if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ] && [ -n "$BUNDLE" ] && [ ! -e "$BUNDLE" ]; then
         mv "$PREVIOUS" "$BUNDLE" 2>/dev/null || true
     fi
-    if [ -n "$PREVIOUS" ]; then rm -rf "$PREVIOUS" 2>/dev/null || true; fi
+    remove_generated_bundle "$PREVIOUS" || true
     true
 }
 trap cleanup EXIT
@@ -143,7 +193,12 @@ install_action() {
     mv "$STAGE" "$BUNDLE"
 
     STAGE=""
-    rm -rf "$PREVIOUS" 2>/dev/null || true
+    # Say so rather than swallowing it. Not fatal -- the new action is already
+    # installed by this point -- but a backup that cannot be removed would
+    # otherwise pile up in the Services folder with nothing to explain it.
+    if ! remove_generated_bundle "$PREVIOUS"; then
+        echo "note: kept '$PREVIOUS'; it holds files this script did not create." >&2
+    fi
     PREVIOUS=""
     BUNDLE=""
 

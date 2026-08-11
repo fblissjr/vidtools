@@ -322,6 +322,19 @@ about the bake.
 
 `install.sh` builds into a staging directory alongside the target and swaps it in, rather than deleting the installed bundle and generating in its place — the old order destroyed a working action before knowing whether the replacement would build. The swap is still a directory *replace*, not an overwrite: rewriting files in place leaves the bundle directory's mtime unchanged, so macOS keeps its cached registration and the action silently drops out of System Settings -> Login Items & Extensions -> Finder while still working from the right-click menu.
 
+**No recursive deletion in `macos/`, deliberately.** `install.sh` removes
+directories via `rm -f` on the two files it generated plus `rmdir`, never
+`rm -rf`. `rmdir` refuses a non-empty directory, so removal physically cannot
+cascade: a bundle holding a file the installer did not create is left standing
+and reported rather than deleted sight-unseen. `remove_generated_bundle()` also
+refuses any path outside `$SERVICES`. The script's paths are built from
+variables and it runs against the user's real Services folder — recursion buys
+nothing there, since the contents are always exactly what we wrote.
+`tests/test_macos_install.py::test_the_installer_never_deletes_recursively`
+keeps `rm -rf` from drifting back in. The `rm -f` calls in the two action
+scripts are single named temp files (the encode target and the `mktemp` error
+file) and are fine.
+
 It also runs the venv's own `python3`, not PATH's. The venv is a hard precondition by that point, so its interpreter is the one guaranteed to exist; PATH's `python3` is whatever happens to be first.
 
 `install.sh` printing "installed:" only means files were written. macOS silently ignores a bundle whose metadata is incomplete, so check the services DB, not the filesystem.

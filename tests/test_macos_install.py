@@ -33,6 +33,21 @@ def _install(services: Path):
     return subprocess.run(["bash", str(INSTALL)], capture_output=True, text=True, env=env)
 
 
+def _shell_functions(*names: str) -> str:
+    """Lift named function definitions verbatim out of install.sh.
+
+    Lets a test drive the real shipped code as a unit when the state it needs
+    cannot be reached by running the whole installer.
+    """
+    src = INSTALL.read_text()
+    out = []
+    for name in names:
+        start = src.index(f"{name}() {{")
+        end = src.index("\n}\n", start) + len("\n}\n")
+        out.append(src[start:end])
+    return "\n".join(out)
+
+
 @pytest.fixture
 def services(tmp_path):
     d = tmp_path / "Services"
@@ -273,10 +288,7 @@ def test_cleanup_restores_the_bundle_even_when_the_staging_dir_cannot_be_removed
     dir to be unremovable at the same moment, which cannot be staged reliably.
     The function text is lifted verbatim from the real script, so this is the
     shipped code, just called directly."""
-    src = INSTALL.read_text()
-    start = src.index("cleanup() {")
-    end = src.index("\n}\n", start) + len("\n}\n")
-    cleanup_fn = src[start:end]
+    fns = _shell_functions("remove_generated_bundle", "cleanup")
 
     stage = tmp_path / "stage"
     (stage / "Contents").mkdir(parents=True)
@@ -293,8 +305,9 @@ def test_cleanup_restores_the_bundle_even_when_the_staging_dir_cannot_be_removed
         r = subprocess.run(
             ["bash", "-c",
              f'set -euo pipefail\n'
+             f'SERVICES={tmp_path!s}\n'
              f'STAGE={stage!s}\nPREVIOUS={previous!s}\nBUNDLE="{bundle!s}"\n'
-             f'{cleanup_fn}\ncleanup\necho REACHED_END\n'],
+             f'{fns}\ncleanup\necho REACHED_END\n'],
             capture_output=True, text=True)
         assert bundle.exists(), (
             "previous bundle not restored -- set -e aborted the trap before the "
@@ -303,6 +316,80 @@ def test_cleanup_restores_the_bundle_even_when_the_staging_dir_cannot_be_removed
         assert "REACHED_END" in r.stdout, "cleanup() did not run to completion"
     finally:
         subprocess.run(["chflags", "-R", "nouchg", str(tmp_path)], check=False)
+
+
+def test_the_installer_never_deletes_recursively():
+    """Claim: deleting this lets `rm -rf` back into a script whose paths are
+    built from variables and which runs against the real Services folder.
+
+    Recursion buys nothing here -- every directory this script removes holds
+    exactly the two files it generated -- so `-r` is pure blast radius. The
+    replacement is `rm -f` on named files plus `rmdir`, which refuses a
+    directory that still holds anything and therefore cannot cascade."""
+    offenders = [ln.strip() for ln in INSTALL.read_text().splitlines()
+                 if "rm -rf" in ln and not ln.lstrip().startswith("#")]
+    assert offenders == [], f"recursive delete reintroduced: {offenders}"
+
+
+def test_removal_leaves_unexpected_files_alone_and_says_so(services):
+    """Claim: deleting this lets uninstall destroy files it did not create.
+
+    `rm -rf` would take a bundle a user had dropped their own files into
+    without a word. `rmdir` refuses, so the directory survives and the script
+    reports it rather than reporting a clean removal that silently wasn't."""
+    _install(services)
+    bundle = services / f"{NAME}.workflow"
+    mine = bundle / "Contents" / "notes-of-my-own.txt"
+    mine.write_text("do not delete me")
+
+    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services)}
+    r = subprocess.run(["bash", str(INSTALL), "--uninstall"],
+                       capture_output=True, text=True, env=env)
+
+    assert mine.exists(), "uninstall destroyed a file it did not create"
+    assert mine.read_text() == "do not delete me"
+    assert r.returncode != 0, "reported a clean uninstall that did not happen"
+    assert "Left in place" in r.stderr, r.stderr
+
+
+def test_removal_tolerates_the_ds_store_finder_leaves_behind(services):
+    """Opening the Services folder in Finder is enough to create one, and it
+    would otherwise block every uninstall with a scary warning."""
+    _install(services)
+    bundle = services / f"{NAME}.workflow"
+    (bundle / "Contents" / ".DS_Store").write_bytes(b"\x00\x01")
+
+    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services)}
+    r = subprocess.run(["bash", str(INSTALL), "--uninstall"],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    assert not bundle.exists()
+
+
+def test_removal_refuses_a_path_outside_the_services_directory(tmp_path):
+    """Claim: deleting the containment check lets a future edit that makes one
+    of these paths computable to something else delete it anyway."""
+    outside = tmp_path / "not-services" / "Something.workflow"
+    (outside / "Contents").mkdir(parents=True)
+    (outside / "Contents" / "Info.plist").write_text("x")
+
+    r = subprocess.run(
+        ["bash", "-c",
+         f'set -euo pipefail\nSERVICES={tmp_path / "services"!s}\n'
+         f'{_shell_functions("remove_generated_bundle")}\n'
+         f'remove_generated_bundle "{outside!s}" || echo REFUSED\n'],
+        capture_output=True, text=True)
+    assert outside.exists(), "removed a directory outside the Services folder"
+    assert "REFUSED" in r.stdout
+    assert "refusing to remove" in r.stderr
+
+
+def test_uninstall_reports_when_nothing_was_installed(services):
+    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services)}
+    r = subprocess.run(["bash", str(INSTALL), "--uninstall"],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    assert "not installed" in r.stdout
 
 
 def test_install_does_not_depend_on_python3_from_path(fake_repo, services, tmp_path):
