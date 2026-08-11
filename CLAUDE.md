@@ -331,6 +331,34 @@ done
 plutil -p '/System/Library/Automator/Encode Media.action/Contents/Resources/Encode Selected Video Files.workflow/Contents/Resources/document.wflow'
 ```
 
+**Registration is two things, not one, and the second is invisible.** A bundle
+can be complete, lint-clean, and listed by `pbs -dump_pboard` and still appear
+nowhere — not in the Finder menu, and *not in System Settings → Login Items &
+Extensions → Finder*, so the user cannot even switch it on. What is missing is
+an entry under `NSServicesStatus` in the `pbs` preference domain, keyed
+`(null) - <menu name> - runWorkflowAsService`, which is what the System Settings
+toggle writes. `macos/enable_service.py` writes it at install time (add-only —
+an existing entry is the user's preference, possibly a deliberate "off"), and
+Finder still needs `killall Finder` to reload its menu.
+
+This was the **seventh** distinct layer this feature has failed in, and it is
+the first one no amount of inspecting the bundle could have found: the image and
+video bundles had byte-identical key sets, the video one matched Apple's own
+shipping `public.movie` Quick Action, and the difference lived entirely in a
+preferences domain nothing in `macos/` had ever touched.
+
+Two red herrings, both burned real time, both confirmed meaningless by control:
+
+- `lsregister -f` on a `.workflow` reports `-10811`. It does that on bundles
+  that work too.
+- `pbs -dump_pboard` reads 0 for a few seconds after `killall pbs`, then
+  recovers. Do not conclude a deregistration from it.
+
+The general lesson: when a Quick Action misbehaves, **diff against a bundle on
+this machine that works** — the user's own, and Apple's under
+`/System/Library/Services`. Both were decisive here, first for ruling the bundle
+out entirely and then for locating the one asymmetry that mattered.
+
 The strongest end-to-end check is to pull `COMMAND_STRING` out of the
 *installed* `document.wflow` and run that (not the repo copy) against a real
 file under `env -i PATH=/usr/bin:/bin ZDOTDIR=<empty dir>`, with `osascript`

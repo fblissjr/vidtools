@@ -211,6 +211,19 @@ install_action() {
     PREVIOUS=""
     BUNDLE=""
 
+    # A complete, registered bundle can still be invisible: absent from the
+    # Finder menu *and* from System Settings -> Login Items & Extensions, so
+    # there is nowhere to switch it on. Writing the enable record that the
+    # System Settings toggle writes is what makes a first install behave like a
+    # second one. It only ever adds -- an existing entry is the user's own
+    # preference, including a deliberate "off".
+    #
+    # Non-fatal: the bundle is installed either way, so a failure here is worth
+    # a note rather than an abort.
+    "$PYTHON" "$REPO_ROOT/macos/enable_service.py" "$name" \
+        "${VIDTOOLS_PBS_DOMAIN:-pbs}" \
+        || echo "note: could not write the enable record for '$name'." >&2
+
     echo "installed: $name"
 }
 
@@ -233,4 +246,5 @@ fi
 
 echo
 echo "  Finder -> right-click a file -> Quick Actions"
+echo "  not showing up?  killall Finder"
 echo "  uninstall: macos/install.sh --uninstall"

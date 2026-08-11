@@ -369,13 +369,47 @@ step. The trade is that AppleScript cannot draw a multi-control panel, so each
 is one preset list instead of a Format / Size / Preserve Metadata trio. If that
 becomes limiting, the shell scripts are what a native front end would call.
 
-`install.sh` printing `installed:` only means files were written — macOS
-silently ignores a bundle whose metadata is incomplete. The services database
-is the only real check:
+### If a Quick Action doesn't appear
+
+`install.sh` printing `installed:` only means files were written. A bundle can
+be complete, lint-clean, **and present in the services database** and still show
+up nowhere — not in the right-click menu, and not in System Settings → Login
+Items & Extensions → Finder, so there is nothing to switch on.
+
+The missing piece is an enable/disable record in the `pbs` preference domain —
+the thing the System Settings toggle writes. `install.sh` now writes it for you
+at install time (only when absent, so it never overrides a preference you set).
+After that, Finder has to reload its menu:
 
 ```bash
-/System/Library/CoreServices/pbs -dump_pboard | grep 'Compress Video'
+killall Finder
 ```
+
+That is the whole fix, and in that order: install, then relaunch Finder.
+
+If it is still missing, work down the layers — each of these was a real dead end
+once:
+
+```bash
+SERVICES=$HOME/Library/Services   # path-privacy: ignore -- the OS decides where Quick Actions live
+
+# 1. is it registered at all?
+/System/Library/CoreServices/pbs -dump_pboard | grep 'Compress Video'
+
+# 2. does it have an enable record? (absent = invisible, and not listed to fix)
+defaults read pbs NSServicesStatus | grep 'Compress Video'
+
+# 3. do the plists parse?
+plutil -lint "$SERVICES/Compress Video.workflow/Contents/"*
+
+# 4. does the file you right-clicked actually match the type it registers for?
+mdls -name kMDItemContentTypeTree -raw your-video.mp4      # want public.movie
+```
+
+Two red herrings, both checked and both meaningless: `lsregister -f` reports
+`-10811` on *every* `.workflow` bundle including ones that work, and
+`pbs -dump_pboard` reads 0 for a few seconds after `killall pbs` while it
+rescans. Neither indicates a problem.
 
 ## Architecture
 

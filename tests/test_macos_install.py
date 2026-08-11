@@ -194,7 +194,7 @@ def fake_repo(tmp_path):
     repo = tmp_path / "repo"
     (repo / "macos").mkdir(parents=True)
     for f in ("install.sh", "make_workflow.py", "compress-image.sh",
-              "compress-video.sh"):
+              "compress-video.sh", "enable_service.py"):
         shutil.copy(REPO / "macos" / f, repo / "macos" / f)
     (repo / "macos" / "install.sh").chmod(0o755)
 
@@ -316,6 +316,77 @@ def test_cleanup_restores_the_bundle_even_when_the_staging_dir_cannot_be_removed
         assert "REACHED_END" in r.stdout, "cleanup() did not run to completion"
     finally:
         subprocess.run(["chflags", "-R", "nouchg", str(tmp_path)], check=False)
+
+
+# ------------------------------------------------- the enable/disable record
+#
+# A bundle can be complete, lint-clean and present in the services database and
+# still never appear -- not in the Finder menu, and not in System Settings, so
+# there is nowhere to switch it on. The only difference between the action that
+# worked and the one that did not was this record. `VIDTOOLS_PBS_DOMAIN` points
+# these at a throwaway plist so they never touch the real `pbs` domain.
+
+@pytest.fixture
+def pbs_domain(tmp_path):
+    return tmp_path / "pbs-test.plist"
+
+
+def _status(domain: Path) -> dict:
+    if not domain.exists():
+        return {}
+    return plistlib.loads(domain.read_bytes()).get("NSServicesStatus", {})
+
+
+def test_install_writes_an_enable_record_for_each_action(services, pbs_domain):
+    """Claim: deleting this ships an action that registers correctly and is
+    invisible anyway, with no way for the user to switch it on."""
+    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services),
+           "VIDTOOLS_PBS_DOMAIN": str(pbs_domain)}
+    r = subprocess.run(["bash", str(INSTALL)], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+
+    status = _status(pbs_domain)
+    for name in (NAME, VIDEO_NAME):
+        key = f"(null) - {name} - runWorkflowAsService"
+        if name == VIDEO_NAME and not (services / f"{name}.workflow").exists():
+            continue                      # skipped for want of ffmpeg; fine
+        assert key in status, f"no enable record for {name}: {sorted(status)}"
+        assert status[key]["presentation_modes"]["ContextMenu"] is True
+
+
+def test_install_never_overturns_an_existing_preference(services, pbs_domain):
+    """Claim: deleting this lets a reinstall switch an action the user turned
+    *off* back on. An existing entry is their decision, not ours to revise."""
+    key = f"(null) - {NAME} - runWorkflowAsService"
+    pbs_domain.write_bytes(plistlib.dumps({"NSServicesStatus": {
+        key: {"presentation_modes": {"ContextMenu": False, "FinderPreview": False,
+                                     "ServicesMenu": False, "TouchBar": False}}}}))
+
+    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services),
+           "VIDTOOLS_PBS_DOMAIN": str(pbs_domain)}
+    assert subprocess.run(["bash", str(INSTALL)], capture_output=True,
+                          text=True, env=env).returncode == 0
+
+    assert _status(pbs_domain)[key]["presentation_modes"]["ContextMenu"] is False, \
+        "reinstall re-enabled an action the user had switched off"
+
+
+def test_a_failure_writing_the_record_does_not_fail_the_install(fake_repo, services):
+    """Claim: deleting the `|| echo` guard aborts a *successful* install under
+    `set -e` because a cosmetic step failed. The bundle is on disk by that
+    point; losing a pre-written toggle is not worth throwing it away.
+
+    The failure has to be staged by breaking the script itself: `defaults
+    import` exits 0 even when it cannot write, so no domain path reaches this
+    branch. An earlier version of this test passed for exactly that reason
+    while testing nothing."""
+    (fake_repo / "macos" / "enable_service.py").write_text(
+        "import sys\nsys.exit('cannot write the enable record')\n")
+
+    r = _install_from(fake_repo, services)
+    assert r.returncode == 0, f"a cosmetic failure aborted the install: {r.stderr}"
+    assert (services / f"{NAME}.workflow").exists()
+    assert "enable record" in r.stderr, "failed silently instead of noting it"
 
 
 def test_the_installer_never_deletes_recursively():
