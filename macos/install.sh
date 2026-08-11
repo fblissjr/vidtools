@@ -44,10 +44,17 @@ VIDEO_NAME="Compress Video"
 #
 # Returns non-zero if anything was left behind.
 remove_generated_bundle() {
-    local dir="$1"
+    # `${1:-}` rather than `$1`: an unbound positional under `set -u` would
+    # abort the caller, and one caller is the EXIT trap -- the same
+    # trap-dies-silently failure this file already had once.
+    local dir="${1:-}"
 
     [ -n "$dir" ] || return 0
-    [ -d "$dir" ] || return 0
+    [ -e "$dir" ] || return 0
+    # Only ever a directory. Anything else standing where a bundle belongs was
+    # not created by this script, so it is not this script's to delete -- and
+    # returning 0 for it would report a removal that never happened.
+    [ -d "$dir" ] || return 1
 
     # Nothing outside the Services directory we were pointed at, ever. Cheap
     # insurance against a future edit that makes one of these paths computable
@@ -81,8 +88,10 @@ if [ "${1:-}" = "--uninstall" ]; then
         elif remove_generated_bundle "$bundle"; then
             echo "removed: $name"
         else
-            echo "warning: '$bundle' holds files this script did not create." >&2
-            echo "         Left in place -- remove it by hand if you meant to." >&2
+            # Covers both shapes of "not ours": a bundle holding extra files,
+            # and something that is not a bundle directory at all.
+            echo "warning: '$bundle' is not a bundle this script can safely remove." >&2
+            echo "         Left in place -- delete it by hand if you meant to." >&2
             rc=1
         fi
     done

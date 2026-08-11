@@ -366,6 +366,27 @@ def test_removal_tolerates_the_ds_store_finder_leaves_behind(services):
     assert not bundle.exists()
 
 
+def test_removal_does_not_claim_success_over_a_non_directory(services):
+    """Claim: deleting this lets uninstall report "removed" for something still
+    on disk that it never touched.
+
+    `[ -d "$dir" ] || return 0` read anything that is not a directory as
+    "nothing to do" and returned *success*, so a plain file sitting where a
+    bundle belongs printed "removed: Compress Image" and exited 0 while the file
+    was untouched. The function's contract is that non-zero means something was
+    left behind; a false clean bill is worse than the warning."""
+    stray = services / f"{NAME}.workflow"
+    stray.write_text("not a bundle at all")
+
+    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services)}
+    r = subprocess.run(["bash", str(INSTALL), "--uninstall"],
+                       capture_output=True, text=True, env=env)
+
+    assert stray.exists(), "removed something that was not a bundle we created"
+    assert r.returncode != 0, "reported a clean uninstall of a file still on disk"
+    assert f"removed: {NAME}" not in r.stdout, r.stdout
+
+
 def test_removal_refuses_a_path_outside_the_services_directory(tmp_path):
     """Claim: deleting the containment check lets a future edit that makes one
     of these paths computable to something else delete it anyway."""
