@@ -7,7 +7,7 @@ the venv's own interpreter, after checking the venv resolves -- an earlier
 version used PATH's `python3` on the theory that this file had to work without
 a venv, but install.sh has required one since well before it gets here.
 
-The metadata keys in `_WORKFLOW_METADATA` are not a plausible-looking subset.
+The metadata keys in `build_metadata` are not a plausible-looking subset.
 They were arrived at by diffing against a Quick Action that Automator itself
 wrote. A subset installs cleanly, passes `plutil -lint`, registers nothing, and
 silently never appears in the Finder menu -- which is exactly how the bug that

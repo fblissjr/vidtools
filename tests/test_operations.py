@@ -80,6 +80,19 @@ class TestResizeMaxEdge:
         resize_video("in.mp4", "out.mp4", max_edge=1280)
         assert "-map_metadata" in capture_ffmpeg[0]
 
+    @pytest.mark.parametrize("bad", [0, -1, -100])
+    def test_rejects_non_positive_caps(self, bad, capture_ffmpeg):
+        """Claim: deleting this lets a nonsense cap through silently.
+
+        `if max_edge:` reads 0 as "not supplied", so `--max-edge 0` reported
+        that no sizing option was given at all. Negatives were worse: they
+        passed straight into the filter expression, and on the image path
+        `--max-edge -100` exited 0 having written a **1x1** file from an
+        800x600 source."""
+        with pytest.raises(ValueError, match="positive"):
+            resize_video("in.mp4", "out.mp4", max_edge=bad)
+        assert capture_ffmpeg == [], "ran ffmpeg with a non-positive cap"
+
 
 class TestRotateVideoValidation:
     def test_raises_on_invalid_rotation(self):

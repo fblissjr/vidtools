@@ -142,6 +142,25 @@ total_before=0
 total_after=0
 first_error=""
 
+# Paths this run must not write over. Seeded with the whole selection, because
+# an output can legitimately land on a file the user also selected: pick
+# `clip.mp4` together with an existing `clip_compressed.mp4` -- the obvious move
+# when re-compressing a folder -- and the first iteration's output destroys the
+# second iteration's input before it is ever read.
+#
+# It also covers the same-stem case. Every re-encode preset forces .mp4, so
+# `clip.mov` and `clip.mp4` both resolve to `clip_compressed.mp4`; without this
+# the second silently overwrites the first while both are still counted.
+CLAIMED=("$@")
+
+_claimed() {
+    local c
+    for c in "${CLAIMED[@]}"; do
+        [ "$c" = "$1" ] && return 0
+    done
+    return 1
+}
+
 for f in "$@"; do
     [ -f "$f" ] || continue
     dir=$(/usr/bin/dirname "$f")
@@ -159,6 +178,12 @@ for f in "$@"; do
         ext=mp4
     fi
     out="$dir/${stem}${SUFFIX}.$ext"
+    n=1
+    while _claimed "$out"; do
+        out="$dir/${stem}${SUFFIX}-$n.$ext"
+        n=$((n + 1))
+    done
+    CLAIMED+=("$out")
 
     before=$(/usr/bin/stat -f%z "$f" 2>/dev/null || echo 0)
     # Keep stderr rather than discarding it. Every diagnostic vidtools emits on
@@ -197,12 +222,32 @@ for f in "$@"; do
         /bin/rm -f "$tmp"
         # Keep the first cause only. A dialog can carry one usefully, and a
         # batch that fails generally fails the same way for every file.
+        #
+        # `tail -n 3` alone is not enough here, and this is the one place the
+        # video action genuinely differs from the image one. `vidtools pipeline`
+        # installs a tqdm sink that redraws with carriage returns, so a real
+        # failing run leaves ~1.3 KB of stderr containing a single newline --
+        # the whole progress bar is one "line", and tailing lines returns the
+        # bar with the cause pushed past what the dialog shows. So: split on
+        # CR as well, drop the bar frames (tqdm's `NN%|` is unmistakable and
+        # cannot occur in an ffmpeg diagnostic), then take the tail.
         if [ -z "$first_error" ]; then
-            first_error=$(/usr/bin/tail -n 3 "$errfile" | /usr/bin/tr '\n' ' ')
+            first_error=$(/usr/bin/tr '\r' '\n' <"$errfile" \
+                | /usr/bin/grep -v '%|' \
+                | /usr/bin/grep -v '^[[:space:]]*$' \
+                | /usr/bin/tail -n 3 | /usr/bin/tr '\n' ' ')
         fi
     fi
     /bin/rm -f "$errfile"
 done
+
+# Nothing selected was a regular file -- every entry was a directory, a broken
+# alias, or something deleted between the right-click and the run. Both counters
+# are still zero, so the failure branch below would fire a *critical* alert
+# reading "Could not compress 0 file(s)". Say nothing instead.
+if [ "$ok" -eq 0 ] && [ "$failed" -eq 0 ]; then
+    exit 0
+fi
 
 if [ "$ok" -eq 0 ]; then
     summary="Could not compress ${failed} file(s)."

@@ -97,7 +97,15 @@ def test_embedded_script_has_the_binary_substituted(services):
 # The video action is a second bundle, so everything the installer does it now
 # has to do twice -- and the two are not symmetric: the video one additionally
 # needs ffmpeg's directory baked in, and is the only one that can be skipped.
+#
+# These carry `ffmpeg` because the installer *deliberately* skips the video
+# bundle when ffmpeg is absent, so asserting the bundle exists is asserting the
+# toolchain exists. Without the marker they fail for an environment reason on
+# any machine without ffmpeg -- exactly what the marker convention prevents.
+# The one test that asserts the *skip* is correspondingly unmarked: it is the
+# no-ffmpeg case, and it has to run precisely where these do not.
 
+@pytest.mark.ffmpeg
 def test_install_creates_both_bundles(services):
     r = _install(services)
     assert r.returncode == 0, r.stderr
@@ -107,6 +115,7 @@ def test_install_creates_both_bundles(services):
         assert (contents / "Info.plist").exists(), f"{name}: no Info.plist"
 
 
+@pytest.mark.ffmpeg
 def test_the_two_bundles_register_for_different_file_types(services):
     """Claim: deleting this lets both bundles register for public.image.
 
@@ -122,6 +131,7 @@ def test_the_two_bundles_register_for_different_file_types(services):
     assert kinds[VIDEO_NAME] == ["public.movie"]
 
 
+@pytest.mark.ffmpeg
 def test_video_bundle_has_a_real_ffmpeg_directory_baked_in(services):
     """Claim: deleting this ships a video action that cannot find ffmpeg.
 
@@ -148,6 +158,7 @@ def test_uninstall_removes_both_bundles(services):
         assert not (services / f"{name}.workflow").exists(), f"{name} survived uninstall"
 
 
+@pytest.mark.ffmpeg
 def test_both_bundles_are_replaced_not_overwritten_on_reinstall(services):
     """The original regression, now applied to both. Rewriting files in place
     leaves the bundle directory's identity unchanged, which is what macOS keys
@@ -246,6 +257,54 @@ def test_a_failed_swap_never_leaves_a_destroyed_bundle(fake_repo, services):
         subprocess.run(["chflags", "-R", "nouchg", str(bundle)], check=False)
 
 
+def test_cleanup_restores_the_bundle_even_when_the_staging_dir_cannot_be_removed(
+        tmp_path):
+    """Claim: deleting this lets `set -e` abort the EXIT trap partway.
+
+    `cleanup()` removes the staging dir, then restores the previous bundle if
+    the slot ended up empty. Written as `[ -n "$STAGE" ] && rm -rf "$STAGE"`,
+    the rm is the last command of an AND-list, so under `set -e` a *failing* rm
+    aborts the whole function and the restore below it never runs -- producing
+    the precise outcome the staging design exists to prevent: nothing
+    installed, and the old bundle stranded under a dotted backup name.
+
+    Driven as a unit rather than through a full install: reaching this state
+    from the outside needs `mv "$STAGE" "$BUNDLE"` to fail *and* the staging
+    dir to be unremovable at the same moment, which cannot be staged reliably.
+    The function text is lifted verbatim from the real script, so this is the
+    shipped code, just called directly."""
+    src = INSTALL.read_text()
+    start = src.index("cleanup() {")
+    end = src.index("\n}\n", start) + len("\n}\n")
+    cleanup_fn = src[start:end]
+
+    stage = tmp_path / "stage"
+    (stage / "Contents").mkdir(parents=True)
+    stuck = stage / "Contents" / "stuck"
+    stuck.write_text("x")
+    subprocess.run(["chflags", "uchg", str(stuck)], check=True)   # rm -rf will fail
+
+    previous = tmp_path / ".previous"
+    previous.mkdir()
+    (previous / "marker").write_text("the old bundle")
+    bundle = tmp_path / "Compress Image.workflow"                 # deliberately absent
+
+    try:
+        r = subprocess.run(
+            ["bash", "-c",
+             f'set -euo pipefail\n'
+             f'STAGE={stage!s}\nPREVIOUS={previous!s}\nBUNDLE="{bundle!s}"\n'
+             f'{cleanup_fn}\ncleanup\necho REACHED_END\n'],
+            capture_output=True, text=True)
+        assert bundle.exists(), (
+            "previous bundle not restored -- set -e aborted the trap before the "
+            f"restore block. stdout={r.stdout!r} stderr={r.stderr!r}")
+        assert (bundle / "marker").read_text() == "the old bundle"
+        assert "REACHED_END" in r.stdout, "cleanup() did not run to completion"
+    finally:
+        subprocess.run(["chflags", "-R", "nouchg", str(tmp_path)], check=False)
+
+
 def test_install_does_not_depend_on_python3_from_path(fake_repo, services, tmp_path):
     """Claim: deleting this lets the install bind to whatever python3 PATH
     happens to surface -- which on this machine is a user-local 3.14, not the
@@ -284,6 +343,7 @@ def test_missing_ffmpeg_skips_the_video_action_but_still_installs_the_image_one(
     assert "ffmpeg" in (r.stderr + r.stdout).lower(), "skipped the video action silently"
 
 
+@pytest.mark.ffmpeg
 def test_a_failed_video_build_leaves_the_image_action_installed(fake_repo, services):
     """Claim: deleting this lets a fault in the second action take out the
     first. They are independent bundles and must fail independently."""

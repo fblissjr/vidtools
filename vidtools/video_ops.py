@@ -75,6 +75,12 @@ def _build_scale_filter(percentage=None, width=None, height=None, algorithm="lan
     an ordinary input (1918x1080 capped at 1280) yields an odd height, and
     yuv420p cannot store one -- the encoder fails rather than rounding.
     """
+    # Checked rather than left to `if max_edge:`, which reads 0 as "not
+    # supplied" and reports that no sizing option was given at all. A negative
+    # is worse: it reached the filter expression unexamined, and on the image
+    # path it silently produced a 1x1 file from an 800x600 source.
+    if max_edge is not None and max_edge < 1:
+        raise ValueError(f"max_edge must be a positive pixel count, got {max_edge}")
     if max_edge:
         return (f"scale=w='min(iw,{max_edge})':h='min(ih,{max_edge})'"
                 f":force_original_aspect_ratio=decrease:force_divisible_by=2"

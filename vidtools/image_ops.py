@@ -334,6 +334,13 @@ def resize_image(input_file: str, output_file: str, percentage: float | None = N
         "nearest": Image.Resampling.NEAREST,
     }.get(algorithm, Image.Resampling.LANCZOS)
 
+    # Before opening anything: a non-positive cap must not leave a file behind.
+    # `if max_edge:` alone reads 0 as unset, and a negative fell through to the
+    # `max(1, ...)` clamp below -- which exists for genuinely tiny images -- and
+    # wrote a 1x1 file with a successful exit.
+    if max_edge is not None and max_edge < 1:
+        raise ValueError(f"max_edge must be a positive pixel count, got {max_edge}")
+
     img = _open_image(input_file)
     if max_edge:
         longest = max(img.width, img.height)

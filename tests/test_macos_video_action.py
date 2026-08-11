@@ -314,6 +314,53 @@ def test_unrecognised_choice_does_nothing(harness, tmp_path):
     assert not argfile.exists()
 
 
+def test_two_selected_files_with_the_same_stem_do_not_collide(harness, tmp_path):
+    """Claim: deleting the collision check silently destroys one of two outputs.
+
+    Every re-encode preset forces `.mp4`, so `clip.mov` and `clip.mp4` -- an
+    entirely ordinary pairing, e.g. a phone video and its export -- both resolve
+    to `clip_compressed.mp4`. The second overwrites the first, `ok` still counts
+    two, and the ratio charges both source sizes against one output."""
+    run, _, _ = harness
+    _video(tmp_path, "clip.mp4")
+    _video(tmp_path, "clip.mov")
+    r = run("Small - 720p", tmp_path / "clip.mp4", tmp_path / "clip.mov")
+    assert r.returncode == 0, r.stderr
+    produced = sorted(p.name for p in tmp_path.iterdir() if "_compressed" in p.name)
+    assert len(produced) == 2, f"one output overwrote the other: {produced}"
+
+
+def test_an_output_never_overwrites_another_selected_file(harness, tmp_path):
+    """Claim: deleting the collision check destroys a file the user selected.
+
+    Select `clip.mp4` together with an existing `clip_compressed.mp4` -- the
+    obvious thing to do when re-compressing a folder -- and the first
+    iteration's output lands on the second iteration's input. The pre-existing
+    file is gone before it is ever read."""
+    run, _, _ = harness
+    _video(tmp_path, "clip.mp4")
+    existing = tmp_path / "clip_compressed.mp4"
+    existing.write_bytes(b"PRECIOUS" * 64)
+    r = run("Small - 720p", tmp_path / "clip.mp4", existing)
+    assert r.returncode == 0, r.stderr
+    assert existing.read_bytes().startswith(b"PRECIOUS"), \
+        "an output overwrote a file that was itself selected as an input"
+
+
+def test_a_selection_with_no_regular_files_says_nothing(harness, tmp_path):
+    """Claim: deleting this guard pops a *critical* alert reading "Could not
+    compress 0 file(s)."
+
+    Non-files are skipped before either counter moves, so ok=0 and failed=0 is
+    reachable, and the failure branch fires on `ok -eq 0` alone."""
+    run, argfile, told = harness
+    (tmp_path / "adir").mkdir()
+    r = run("Small - 720p", tmp_path / "adir", tmp_path / "gone.mp4")
+    assert r.returncode == 0, f"alarmed the user over an empty selection: {told()!r}"
+    assert not argfile.exists()
+    assert "0 file(s)" not in told(), f"nonsense count shown: {told()!r}"
+
+
 def test_directories_and_missing_files_are_skipped(harness, tmp_path):
     run, argfile, _ = harness
     (tmp_path / "adir").mkdir()
@@ -336,6 +383,37 @@ def test_failure_alert_names_the_cause(harness, tmp_path):
     r = run("Small - 720p", _video(tmp_path), vt_body=vt)
     assert r.returncode == 1
     assert "Unknown encoder" in told(), f"cause not surfaced: {told()!r}"
+
+
+def test_progress_bar_output_does_not_crowd_out_the_cause(harness, tmp_path):
+    """Claim: deleting the \\r-splitting reduces the alert to progress bars.
+
+    `vidtools pipeline` installs a tqdm sink that writes carriage-return-updated
+    bar frames to stderr. Measured on a real run: 1313 bytes containing exactly
+    *one* newline. So `tail -n 3` returns the entire bar and the real cause is
+    pushed past what the dialog shows -- which is the 0.28.0 regression
+    ("the alert named no cause") arriving by a different route.
+
+    Video-only: the image action's `compress` never reports progress, which is
+    why this could not happen there."""
+    run, _, told = harness
+    # Real CRs and literal %, as tqdm emits them: %% survives printf, \r is
+    # turned into a carriage return by printf rather than by Python.
+    bar = (r"\rProcessing:   0%%|          | 0/100 [00:00<?, ?%%/s]"
+           r"\rProcessing:  50%%|#####     | 50/100 [00:01<00:01, 40.0%%/s]"
+           r"\rProcessing: 100%%|##########| 100/100 [00:02<00:00, 41.2%%/s]\n")
+    vt = ("#!/bin/zsh\n"
+          'if [ "$1" = "--help" ]; then exit 0; fi\n'
+          f'printf \'{bar}\' >&2\n'
+          'echo "Error: Conversion failed: No space left on device" >&2\n'
+          "exit 1\n")
+    r = run("Small - 720p", _video(tmp_path), vt_body=vt)
+    assert r.returncode == 1
+    m = re.search(r'message "(.*)" as critical', told(), re.S)
+    assert m, f"no alert recorded: {told()!r}"
+    body = m.group(1)
+    assert "No space left on device" in body, f"cause lost: {body!r}"
+    assert "Processing:" not in body, f"alert is progress-bar noise: {body!r}"
 
 
 def test_alert_message_survives_quotes_and_backslashes(harness, tmp_path):

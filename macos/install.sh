@@ -94,12 +94,17 @@ BUNDLE=""
 # So the old bundle is moved aside rather than deleted, and cleanup restores it
 # if the bundle slot ended up empty. Ordering matters: restore before removing
 # the backup, and never let cleanup failures mask the real exit status.
+# Every step is `|| true`. `set -e` applies to the last command of an AND-list,
+# so `[ -n "$STAGE" ] && rm -rf "$STAGE"` aborts this whole function the moment
+# the rm fails -- and a failing rm is precisely the case this exists for, so the
+# restore below would be skipped exactly when it is needed. That also masks the
+# real exit status.
 cleanup() {
-    [ -n "$STAGE" ] && rm -rf "$STAGE" 2>/dev/null
+    if [ -n "$STAGE" ]; then rm -rf "$STAGE" 2>/dev/null || true; fi
     if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ] && [ -n "$BUNDLE" ] && [ ! -e "$BUNDLE" ]; then
         mv "$PREVIOUS" "$BUNDLE" 2>/dev/null || true
     fi
-    [ -n "$PREVIOUS" ] && rm -rf "$PREVIOUS" 2>/dev/null
+    if [ -n "$PREVIOUS" ]; then rm -rf "$PREVIOUS" 2>/dev/null || true; fi
     true
 }
 trap cleanup EXIT

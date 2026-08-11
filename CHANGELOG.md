@@ -17,6 +17,17 @@
 ### Fixed
 - The two Quick Action bundles no longer share action UUIDs. They were literals from when only one bundle existed.
 
+### Fixed before release (review pass)
+Seven findings, all reproduced before acting on any of them. None shipped.
+
+- **`set -e` was aborting the installer's EXIT trap partway through.** `cleanup()` removes the staging directory and *then* restores the previous bundle; written as `[ -n "$STAGE" ] && rm -rf "$STAGE"`, the rm is the last command of an AND-list, so a failing rm ends the function before the restore runs — precisely when a failing rm is the thing being recovered from. The outcome would have been the one the staging design exists to prevent: nothing installed and the old bundle stranded under a dotted backup name. Every step in the trap is `|| true` again.
+- **The failure alert would have been a wall of progress bar.** `vidtools pipeline` installs a tqdm sink that redraws with carriage returns, so a real failing run leaves ~1.3 KB of stderr containing exactly *one* newline — `tail -n 3` returned the entire bar with the cause pushed past what the dialog shows. That is the 0.28.0 regression ("the alert named no cause") arriving by a new route, and it is video-only, since `compress` never reports progress. stderr is now split on carriage returns with bar frames dropped.
+- **A negative `--max-edge` silently wrote a 1x1 file.** `--max-edge -100` on an 800x600 image exited 0 having produced a single pixel: the negative scale factor fell through to the `max(1, ...)` clamp that exists for genuinely tiny images. `0` was also read as "not supplied" and reported that no sizing option had been given. Both now raise.
+- **Two selected files with the same stem overwrote each other.** Every re-encode preset forces `.mp4`, so `clip.mov` and `clip.mp4` both resolved to `clip_compressed.mp4` — the second silently replacing the first while both were counted. Worse, selecting `clip.mp4` alongside an existing `clip_compressed.mp4` destroyed the latter before it was read. Outputs are now claimed against the whole selection and suffixed on collision.
+- A selection containing no regular files raised a *critical* alert reading "Could not compress 0 file(s)." It now exits quietly.
+- Five installer tests assert the video bundle exists, which the installer only builds when ffmpeg is present — so they failed for an environment reason on any machine without it. They carry `@pytest.mark.ffmpeg` now, which is what the marker convention is for. The test asserting the *skip* is deliberately unmarked.
+- `make_workflow.py`'s docstring named `_WORKFLOW_METADATA`, replaced by `build_metadata()` in this same change.
+
 ### Testing
 - `tests/test_macos_video_action.py` drives the video script end to end with stubs, and every claim in it was verified by reintroducing the defect and confirming red. That caught two real problems: the script assigned to `status`, which is **read-only in zsh** (the spelled-out form of `$?`) and aborted the script outright; and a test that located the temp file by a marker its own mutation removed, so it passed while blind to the defect it claimed to catch.
 - The same mutation pass over the installer covers all eight of its claims.

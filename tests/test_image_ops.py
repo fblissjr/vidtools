@@ -58,6 +58,18 @@ class TestResizeImage:
         with Image.open(out) as img:
             assert img.size == (50, 200)
 
+    @pytest.mark.parametrize("bad", [0, -1, -100])
+    def test_resize_rejects_a_non_positive_max_edge(self, sample_image, tmp_path, bad):
+        """Claim: deleting this lets `--max-edge -100` write a 1x1 image.
+
+        Verified before the fix: an 800x600 source came back 1x1 with exit 0,
+        because the negative scale factor fell through to the `max(1, ...)`
+        clamp that exists for genuinely tiny images."""
+        out = str(tmp_path / "bad.png")
+        with pytest.raises(ValueError, match="positive"):
+            resize_image(sample_image, out, max_edge=bad)
+        assert not os.path.exists(out), "wrote a file for a non-positive cap"
+
     def test_resize_by_height(self, sample_image, tmp_path):
         out = str(tmp_path / "resized.png")
         resize_image(sample_image, out, height=50)

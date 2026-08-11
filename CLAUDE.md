@@ -250,6 +250,27 @@ removed, so it passed while blind to the defect it named. A shell script driven
 through stubs has more ways to pass vacuously than Python does — the stub can go
 inert and the assertions still hold.
 
+**Two shell hazards this codebase has now been bitten by, both silent:**
+
+- **`set -e` acts on the last command of an AND-list.** Rewriting
+  `rm -rf "$X" || true` as `[ -n "$X" ] && rm -rf "$X"` reads like adding a
+  guard; it also moves the `rm` into the position `set -e` acts on, so a
+  *failing* rm aborts the enclosing function. In `install.sh`'s EXIT trap that
+  skipped the bundle-restore block — exactly when a failing rm is the thing
+  being recovered from. A conditional whose body can fail needs
+  `if ...; then ...; fi`, not `&&`.
+- **tqdm defeats line-based tailing of vidtools stderr.** The progress sink
+  redraws with carriage returns, so a failing `pipeline` run leaves ~1.3 KB of
+  stderr containing a *single* newline: `tail -n 3` returns the whole progress
+  bar and pushes the actual error out of view. Anything parsing vidtools stderr
+  needs `tr '\r' '\n'` first and to drop frames matching `%|`. The image action
+  is immune only because `compress` reports no progress.
+
+Reaching a trap's recovery path from the outside can be impossible to stage
+(it needed two failures at the same instant). Lifting the function text out of
+the script and driving it directly is a legitimate answer — it is still the
+shipped code, called as a unit.
+
 The fifth is the reason **`-x` is not an installability check**. It proves a
 file is executable, not that it imports; a broken editable install satisfies it
 and exits 1 on every call. Both `install.sh` and the embedded scripts now run
