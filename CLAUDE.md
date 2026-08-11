@@ -12,6 +12,11 @@ video 0.29.0) under `macos/`. Each action embeds a `vidtools` invocation into
 its bundle at install time, so a CLI change does not reach it until
 `macos/install.sh` is re-run.
 
+Five files under `macos/`: `install.sh` (orchestrates), `make_workflow.py`
+(builds both plists), `compress-image.sh` / `compress-video.sh` (the embedded
+action bodies), and `enable_service.py` (the enable record — see *Registration
+is two things* below; without it a perfectly built bundle is invisible).
+
 **Two bundles, one installer.** `Compress Image` registers for `public.image`
 and calls `compress`; `Compress Video` registers for `public.movie` and calls
 `pipeline` / `convert --copy`. One bundle accepting both types would appear on

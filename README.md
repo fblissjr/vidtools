@@ -329,7 +329,9 @@ your machine's absolute paths — to the `vidtools` binary, and for the video
 action to ffmpeg's directory — and a `.wflow` is an opaque plist that reviews
 badly. The reviewable parts (`macos/compress-image.sh`,
 `macos/compress-video.sh`) stay in plain sight, and `macos/make_workflow.py`
-builds the plists so they can be tested.
+builds the plists so they can be tested. `macos/enable_service.py` writes the
+enable record described under [If a Quick Action doesn't
+appear](#if-a-quick-action-doesnt-appear).
 
 **Python changes reach the actions immediately** (the venv install is editable),
 but the shell scripts are embedded into the bundles at install time — editing
@@ -377,13 +379,27 @@ up nowhere — not in the right-click menu, and not in System Settings → Login
 Items & Extensions → Finder, so there is nothing to switch on.
 
 The missing piece is an enable/disable record in the `pbs` preference domain —
-the thing the System Settings toggle writes. `install.sh` now writes it for you
-at install time (only when absent, so it never overrides a preference you set).
-After that, Finder has to reload its menu:
+the thing the System Settings toggle writes. `install.sh` writes it for you at
+install time via `macos/enable_service.py`. After that, Finder has to reload its
+menu:
 
 ```bash
 killall Finder
 ```
+
+That write is deliberately cautious, because the domain it touches holds *every*
+service's on/off state:
+
+- **Add-only.** An existing record is your decision, including a deliberate
+  "off", so reinstalling never switches an action back on.
+- **It reads the domain back** and fails loudly if the record did not land.
+  `defaults import` exits 0 whether or not it wrote anything, so its exit code
+  is not evidence — and a silent no-op here would leave the action invisible
+  while claiming it had been fixed.
+- **A failed read is a refusal, not an empty domain.** `defaults export` emits a
+  full plist even for a domain that never existed, so empty output means the
+  read failed. Writing on that would replace the whole record set with one
+  entry and wipe every other Quick Action's toggle.
 
 That is the whole fix, and in that order: install, then relaunch Finder.
 
