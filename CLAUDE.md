@@ -347,6 +347,22 @@ video bundles had byte-identical key sets, the video one matched Apple's own
 shipping `public.movie` Quick Action, and the difference lived entirely in a
 preferences domain nothing in `macos/` had ever touched.
 
+**`defaults` lies twice, and both lies are destructive here.** `defaults import`
+exits 0 whether or not it wrote anything, so `check=True` is not a success
+signal — `enable_service.py` reads the domain back and confirms the key landed.
+And `defaults import` merges at the *top* level but **replaces** nested keys, so
+any write of `NSServicesStatus` must be built from the full current contents;
+`defaults export` emits a complete `<dict/>` plist even for a domain that never
+existed, so an empty read means failure, not "no entries", and writing on it
+would erase every other Quick Action's toggle.
+
+**Anything running `install.sh` from a test must set `VIDTOOLS_PBS_DOMAIN`.**
+It falls back to the real `pbs` domain, so a helper that forgets it
+read-modify-writes the user's live preferences. `tests/test_macos_install.py`
+routes every install through one `_test_env`, and
+`test_test_installs_never_touch_the_real_preference_domain` fails if any
+environment is built without it.
+
 Two red herrings, both burned real time, both confirmed meaningless by control:
 
 - `lsregister -f` on a `.workflow` reports `-10811`. It does that on bundles

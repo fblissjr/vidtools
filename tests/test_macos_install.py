@@ -28,9 +28,24 @@ NAME = "Compress Image"
 VIDEO_NAME = "Compress Video"
 
 
+def _test_env(services: Path, extra=None) -> dict:
+    """Environment for a test install.
+
+    `VIDTOOLS_PBS_DOMAIN` is not optional here. Without it `install.sh` falls
+    back to the real `pbs` domain, and every test install performs a
+    read-modify-write of the user's live preferences — adding enable records for
+    bundles that exist only under `tmp_path`. Derived from `services` so each
+    test gets its own throwaway plist.
+    """
+    return {**os.environ,
+            "VIDTOOLS_SERVICES_DIR": str(services),
+            "VIDTOOLS_PBS_DOMAIN": str(services.parent / "pbs-test.plist"),
+            **(extra or {})}
+
+
 def _install(services: Path):
-    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services)}
-    return subprocess.run(["bash", str(INSTALL)], capture_output=True, text=True, env=env)
+    return subprocess.run(["bash", str(INSTALL)], capture_output=True, text=True,
+                          env=_test_env(services))
 
 
 def _shell_functions(*names: str) -> str:
@@ -165,7 +180,7 @@ def test_video_bundle_has_a_real_ffmpeg_directory_baked_in(services):
 
 def test_uninstall_removes_both_bundles(services):
     _install(services)
-    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services)}
+    env = _test_env(services)
     r = subprocess.run(["bash", str(INSTALL), "--uninstall"],
                        capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr
@@ -208,9 +223,9 @@ def fake_repo(tmp_path):
 
 
 def _install_from(repo: Path, services: Path, extra_env=None):
-    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services), **(extra_env or {})}
     return subprocess.run(["bash", str(repo / "macos" / "install.sh")],
-                          capture_output=True, text=True, env=env)
+                          capture_output=True, text=True,
+                          env=_test_env(services, extra_env))
 
 
 def test_install_rejects_a_binary_that_does_not_run(fake_repo, services):
@@ -381,12 +396,131 @@ def test_a_failure_writing_the_record_does_not_fail_the_install(fake_repo, servi
     branch. An earlier version of this test passed for exactly that reason
     while testing nothing."""
     (fake_repo / "macos" / "enable_service.py").write_text(
-        "import sys\nsys.exit('cannot write the enable record')\n")
+        "import sys\nsys.exit('STUB-EXPLODED')\n")
 
     r = _install_from(fake_repo, services)
     assert r.returncode == 0, f"a cosmetic failure aborted the install: {r.stderr}"
     assert (services / f"{NAME}.workflow").exists()
-    assert "enable record" in r.stderr, "failed silently instead of noting it"
+    # Match the installer's own wording, not the stub's. An earlier version
+    # asserted on a substring both messages contained, so it stayed green when
+    # the note was deleted.
+    assert "note: could not write" in r.stderr, \
+        f"installer swallowed the failure instead of noting it: {r.stderr!r}"
+
+
+ENABLE = REPO / "macos" / "enable_service.py"
+
+
+def _enable(name, domain, python=sys.executable):
+    return subprocess.run([python, str(ENABLE), name, str(domain)],
+                          capture_output=True, text=True)
+
+
+def test_enable_service_does_not_claim_success_when_the_write_is_lost(tmp_path):
+    """Claim: deleting the read-back lets the installer print "enabled:" over a
+    write that never landed.
+
+    `defaults import` exits 0 whether or not it wrote anything — verified
+    against an unwritable directory. Trusting its exit code puts the user back
+    in the exact invisible-action state this feature exists to fix, with a
+    success message saying it was fixed."""
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    domain = ro / "x.plist"
+    domain.write_bytes(plistlib.dumps({}))
+    ro.chmod(0o500)
+    try:
+        r = _enable("Test Action", domain)
+        assert r.returncode != 0, (
+            f"reported success for a write that did not land: {r.stdout!r}")
+        assert "enabled:" not in r.stdout
+    finally:
+        ro.chmod(0o700)
+
+
+def test_enable_service_keeps_every_other_service_entry(tmp_path):
+    """Claim: deleting this lets the enable record wipe every other Quick
+    Action's toggle.
+
+    `defaults import` merges at the top level but *replaces* a nested key
+    outright — verified. So writing an NSServicesStatus built from anything
+    less than the full current contents silently drops the rest."""
+    domain = tmp_path / "pbs.plist"
+    other = "(null) - Someone Elses Action - runWorkflowAsService"
+    subprocess.run(["defaults", "import", str(domain), "-"],
+                   input=plistlib.dumps({
+                       "SomeUnrelatedTopLevelKey": "keep me",
+                       "NSServicesStatus": {other: {"presentation_modes": {"ContextMenu": False}}},
+                   }), check=True)
+
+    assert _enable("Compress Video", domain).returncode == 0
+    after = plistlib.loads(subprocess.run(
+        ["defaults", "export", str(domain), "-"], capture_output=True).stdout)
+
+    status = after.get("NSServicesStatus", {})
+    assert other in status, "wiped another service's enable record"
+    assert status[other]["presentation_modes"]["ContextMenu"] is False, "altered it"
+    assert "(null) - Compress Video - runWorkflowAsService" in status
+    assert after.get("SomeUnrelatedTopLevelKey") == "keep me"
+
+
+def test_enable_service_writes_nothing_when_the_read_comes_back_empty(tmp_path):
+    """Claim: deleting this makes a failed *read* destructive.
+
+    `defaults export` emits a full `<dict/>` plist even for a domain that has
+    never existed, so empty output means the read failed, not "no entries yet".
+    The old code defaulted it to `{}` — and because `defaults import` *replaces*
+    nested keys, writing a status dict rebuilt from nothing erases every other
+    Quick Action's toggle.
+
+    Asserted on whether an import happened at all, not on the exit code: a bare
+    `plistlib.loads(b"")` also exits non-zero, so a returncode assertion cannot
+    tell the guard from a crash. The stub records any import it is handed."""
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    marker = tmp_path / "import-happened"
+    (fake / "defaults").write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "export" ]; then exit 0; fi\n'        # empty read
+        f'if [ "$1" = "import" ]; then cat > "{marker}"; fi\n'
+        "exit 0\n")
+    (fake / "defaults").chmod(0o755)
+
+    r = subprocess.run([sys.executable, str(ENABLE), "Compress Video", "whatever"],
+                       capture_output=True, text=True,
+                       env={**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"})
+
+    assert not marker.exists(), (
+        "wrote preferences off a failed read -- this is what erases every other "
+        "service's enable record")
+    assert r.returncode != 0
+    assert "enabled:" not in r.stdout
+
+
+def test_test_installs_never_touch_the_real_preference_domain():
+    """Claim: deleting this lets the suite read-modify-write the user's live
+    `pbs` domain on every install test.
+
+    `install.sh` falls back to `${VIDTOOLS_PBS_DOMAIN:-pbs}`, so a helper that
+    forgets the variable silently edits real preferences — adding enable records
+    for bundles that only ever existed under `tmp_path`. Both helpers went out
+    that way before this."""
+    env = _test_env(Path("/tmp/whatever/Services"))
+    domain = env.get("VIDTOOLS_PBS_DOMAIN")
+    assert domain, "test installs would fall back to the real 'pbs' domain"
+    assert domain != "pbs" and domain.endswith(".plist"), domain
+
+    # And no helper may build its own environment and skip it. Scanned by
+    # statement rather than by line: these env dicts span several lines, so a
+    # line-based check reports every multi-line one as a miss.
+    src = Path(__file__).read_text()
+    stray = []
+    start = 0
+    while (i := src.find("VIDTOOLS_SERVICES_DIR", start)) != -1:
+        if "VIDTOOLS_PBS_DOMAIN" not in src[i:i + 200]:
+            stray.append(src[max(0, i - 60):i + 60].replace("\n", " "))
+        start = i + 1
+    assert stray == [], f"environment built without the test pbs domain: {stray}"
 
 
 def test_the_installer_never_deletes_recursively():
@@ -413,7 +547,7 @@ def test_removal_leaves_unexpected_files_alone_and_says_so(services):
     mine = bundle / "Contents" / "notes-of-my-own.txt"
     mine.write_text("do not delete me")
 
-    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services)}
+    env = _test_env(services)
     r = subprocess.run(["bash", str(INSTALL), "--uninstall"],
                        capture_output=True, text=True, env=env)
 
@@ -430,7 +564,7 @@ def test_removal_tolerates_the_ds_store_finder_leaves_behind(services):
     bundle = services / f"{NAME}.workflow"
     (bundle / "Contents" / ".DS_Store").write_bytes(b"\x00\x01")
 
-    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services)}
+    env = _test_env(services)
     r = subprocess.run(["bash", str(INSTALL), "--uninstall"],
                        capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr
@@ -449,7 +583,7 @@ def test_removal_does_not_claim_success_over_a_non_directory(services):
     stray = services / f"{NAME}.workflow"
     stray.write_text("not a bundle at all")
 
-    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services)}
+    env = _test_env(services)
     r = subprocess.run(["bash", str(INSTALL), "--uninstall"],
                        capture_output=True, text=True, env=env)
 
@@ -477,7 +611,7 @@ def test_removal_refuses_a_path_outside_the_services_directory(tmp_path):
 
 
 def test_uninstall_reports_when_nothing_was_installed(services):
-    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services)}
+    env = _test_env(services)
     r = subprocess.run(["bash", str(INSTALL), "--uninstall"],
                        capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr
@@ -545,7 +679,7 @@ def test_uninstall_removes_the_bundle(services):
     _install(services)
     bundle = services / f"{NAME}.workflow"
     assert bundle.exists()
-    env = {**os.environ, "VIDTOOLS_SERVICES_DIR": str(services)}
+    env = _test_env(services)
     r = subprocess.run(["bash", str(INSTALL), "--uninstall"],
                        capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr
