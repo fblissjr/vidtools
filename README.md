@@ -12,11 +12,26 @@ a machine with no ffmpeg at all — the toolchain check is scoped to the
 invocations that actually need it.
 
 **On macOS, `brew install ffmpeg` is not enough for every verb.** Homebrew's
-`ffmpeg` formula carries ten dependencies and omits libass, libaom-av1 and
-libvorbis. That means `subtitles` burn-in is unavailable (it reports this
-clearly rather than failing cryptically), and the `av1_quality` preset and
-`.ogg` output will fail. `brew install ffmpeg-full` is the batteries-included
-build. WebP is unaffected — images encode through PIL, not ffmpeg.
+`ffmpeg` formula is the slim one and omits libass, libaom-av1, libvorbis and
+libwebp. That means `subtitles` burn-in is unavailable (it reports this clearly
+rather than failing cryptically), and the `av1_quality` preset and `.ogg` output
+will fail. WebP is unaffected — images encode through PIL, not ffmpeg.
+
+`ffmpeg-full` is the batteries-included build, but it is **keg-only**, so
+Homebrew deliberately does not link it and installing alone changes nothing:
+
+```bash
+brew install ffmpeg-full
+export PATH="/opt/homebrew/opt/ffmpeg-full/bin:$PATH"   # add to your shell config
+```
+
+Check what you actually ended up with — an x86_64 build under Rosetta on Apple
+silicon works, but runs slower and cannot open a VideoToolbox encoder, so
+`--hwaccel` silently has nothing to use:
+
+```bash
+file "$(which ffmpeg)"      # want: Mach-O 64-bit executable arm64
+```
 
 ```bash
 uv sync
@@ -48,6 +63,26 @@ vidtools rotate -r 45 photo.png out.png               # image: any angle
 ```
 
 `--quality` is a unified 1-100 knob (higher = better) on `convert`; power users can still pass `--crf` (video) or `--bitrate` (audio) to override. Video-specific power-user flags (`--algorithm`, `--video-codec`, `--accurate`, `--hwaccel`, ...) are accepted by the same verbs when the input is a video.
+
+**`resize --max-edge N` is a cap, not a target**, and differs from `-W`/`-H`/`-p`
+in two ways that matter when you are pointing it at files you have not
+individually inspected:
+
+- It **never enlarges**. `-H 720` on a 480p clip upscales it — a bigger file,
+  no more detail. `--max-edge 720` leaves it alone.
+- It caps the **longest** edge, so orientation does not change the meaning.
+  `-H 720` means "720p" on landscape and something far harsher on portrait —
+  the same flag, two different outcomes:
+
+  | source | `-H 720` | `--max-edge 1280` |
+  |---|---|---|
+  | 1920x1080 (landscape) | 1280x720 | 1280x720 |
+  | 1080x1920 (portrait) | 406x720 | 720x1280 |
+
+  Both give you "720p" under `--max-edge`, whichever way the phone was held.
+
+It works on video and images alike, and as a `pipeline` step. That is what the
+Finder video presets are built on.
 
 ### Video-only commands
 
@@ -160,6 +195,13 @@ vidtools pipeline in.mp4 out.mp4 \
 
 3-5x faster than running separate commands; no intermediate files; no compounding quality loss. Supports trim (alias cut), resize, crop, rotate, sanitize, subtitles, convert. Excludes multi-input or different-output ops (concat, slideshow, extract-*, add-audio, preset).
 
+`resize` takes `--max-edge` here too, which is the shape the Finder video
+presets use — cap the size and set the quality in a single ffmpeg invocation:
+
+```bash
+vidtools pipeline in.mp4 out.mp4 resize --max-edge 1280 convert --crf 26
+```
+
 ### Metadata: what gets stripped
 
 **Identifying metadata is removed by default.** GPS coordinates, camera
@@ -264,6 +306,12 @@ a fixed CRF.
 instant, pixel-identical, and keeps the source container. It is what you want
 when the file is fine and only its metadata is not.
 
+**Nothing is ever overwritten.** Outputs follow the same rule as `compress`: a
+second pass over `clip.mp4` writes `clip_compressed-2.mp4` rather than replacing
+the first result, and two selected files whose outputs would collide (`clip.mov`
+and `clip.mp4` both want `clip_compressed.mp4`) get distinct names. Selecting a
+file together with its own earlier output is safe for the same reason.
+
 Encodes are written to a temp file beside the destination and moved into place
 on success, so an interrupted encode never leaves a half-written file under the
 real name.
@@ -308,6 +356,13 @@ actually starts, so this surfaces as a named error telling you to re-run
 `install.sh` builds each bundle in a staging directory and swaps it in, so a
 failed install leaves the previous working action untouched, and the two
 actions fail independently.
+
+**Uninstall removes only what the installer wrote.** It deletes the two
+generated files and then `rmdir`s the bundle — never `rm -rf` — so a bundle you
+have put your own files into is left standing, reported, and the script exits
+non-zero rather than reporting a removal that quietly took your files with it.
+Same for anything that is not a bundle directory at all. `--uninstall` on a
+machine with nothing installed says so and exits 0.
 
 Automator rather than a native app, so there is no code-signing or notarisation
 step. The trade is that AppleScript cannot draw a multi-control panel, so each

@@ -347,6 +347,26 @@ def test_an_output_never_overwrites_another_selected_file(harness, tmp_path):
         "an output overwrote a file that was itself selected as an input"
 
 
+def test_a_rerun_does_not_replace_the_previous_result(harness, tmp_path):
+    """Claim: deleting this makes the video action contradict the image one.
+
+    `compress._unique_path` never lets a *derived* output replace an existing
+    file -- a second run writes `photo_compressed-2.webp` -- and the README
+    states that as a property of the tool. Two right-clicks on the same video
+    must behave the same way, and the counter has to start at 2 so the second
+    result reads as "-2" in both places."""
+    run, _, _ = harness
+    src = _video(tmp_path)
+    assert run("Small - 720p", src).returncode == 0
+    first = (tmp_path / "clip_compressed.mp4").read_bytes()
+    assert run("Small - 720p", src).returncode == 0
+
+    assert (tmp_path / "clip_compressed.mp4").read_bytes() == first, \
+        "second run replaced the first result"
+    assert (tmp_path / "clip_compressed-2.mp4").exists(), \
+        f"expected -2, got {sorted(p.name for p in tmp_path.iterdir())}"
+
+
 def test_a_selection_with_no_regular_files_says_nothing(harness, tmp_path):
     """Claim: deleting this guard pops a *critical* alert reading "Could not
     compress 0 file(s)."

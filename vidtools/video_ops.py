@@ -68,7 +68,7 @@ def _build_scale_filter(percentage=None, width=None, height=None, algorithm="lan
       *up* to fill the box.
     - It caps the longest edge whichever way the video is turned, by fitting
       inside a square box. A plain height cap reads correctly on landscape and
-      mangles portrait: phone video at `-H 720` comes out 405x720, a far harsher
+      mangles portrait: phone video at `-H 720` comes out 406x720, a far harsher
       cut than the same number applies to a landscape clip.
 
     `force_divisible_by=2` is not decoration. The derived edge is arbitrary, so

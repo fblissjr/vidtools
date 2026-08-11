@@ -177,9 +177,14 @@ for f in "$@"; do
     else
         ext=mp4
     fi
+    # Same rule and same spelling as `compress._unique_path`: a derived output
+    # never replaces an existing file, and the counter starts at 2 so the second
+    # result reads as "-2". Checking the selection as well as the disk covers
+    # the case a file-existence test cannot -- two inputs in this batch whose
+    # outputs collide before either has been written.
     out="$dir/${stem}${SUFFIX}.$ext"
-    n=1
-    while _claimed "$out"; do
+    n=2
+    while [ -e "$out" ] || _claimed "$out"; do
         out="$dir/${stem}${SUFFIX}-$n.$ext"
         n=$((n + 1))
     done

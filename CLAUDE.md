@@ -34,8 +34,18 @@ has it punishes the wrong user.
 
 Python >=3.14. Requires `ffmpeg` >= 5.1 and `yt-dlp` in PATH.
 
-**Homebrew's `ffmpeg` formula is slim** — ten dependencies, no libass, libwebp,
-libaom-av1 or libvorbis. `ffmpeg-full` is the batteries-included one. Consequences
+**Homebrew's `ffmpeg` formula is slim** — no libass, libwebp, libaom-av1 or
+libvorbis. `ffmpeg-full` is the batteries-included one, but it is **keg-only**:
+`brew install ffmpeg-full` alone changes nothing, because Homebrew does not link
+it. It needs `/opt/homebrew/opt/ffmpeg-full/bin` on PATH ahead of whatever else
+provides `ffmpeg`, or the capability probe keeps reporting the old build's gaps.
+
+Worth checking `file "$(which ffmpeg)"` before believing any encoder result: an
+x86_64 build under Rosetta on Apple silicon runs fine but **cannot open a
+VideoToolbox compression session**, so `--hwaccel` degrades to nothing with no
+error that names the cause. That was the state of this machine until 0.29.0.
+
+Consequences
 in this codebase, all verified against a slim build:
 
 - `subtitles` burn-in needs libass and is unavailable; `add_subtitles` checks for
@@ -58,7 +68,7 @@ build. Only encoders and libass are affected.
 - **No `exit(1)` in library code.** Always raise `FfmpegError` (from `vidtools.progress`). The CLI entrypoint catches and exits.
 - **No stub handlers.** Only register CLI commands when the operation actually exists.
 - **Reuse helpers in `video_ops.py`**: `_add_faststart_if_mp4`, `_add_time_range_args`, `_apply_encode_options`, `_build_scale_filter`, `_build_transpose_filter`, `_escape_subtitle_path`, `_get_video_encoder`, `_TRANSPOSE_MAP`, `DEFAULT_VIDEO_CODEC`, `DEFAULT_AUDIO_CODEC`. Pipeline.py imports them — don't duplicate. Use `_apply_encode_options` for the standard `-c:v / -c:a / -crf|-q:v` block (handles `crf=0` correctly; raw `if crf:` does not).
-- **`_build_scale_filter` has four modes, and `max_edge` is the only one that can decline to act.** `-p`/`-W`/`-H` are unconditional targets; `--max-edge N` is a *cap* that never enlarges and fits inside a square box so it caps the longest edge whichever way the video is turned. Both properties are load-bearing for the Finder presets, which are applied to whatever was selected rather than to a file the user sized by hand: without the `min()` on each axis, `force_original_aspect_ratio=decrease` scales a small input *up* to fill the box; without the square box, "720p" cuts portrait phone video to 405x720 while leaving landscape at 1280x720. `force_divisible_by=2` is not decoration either — 1918x1080 capped at 1280 derives an odd height, and yuv420p cannot store one, so the encode fails outright.
+- **`_build_scale_filter` has four modes, and `max_edge` is the only one that can decline to act.** `-p`/`-W`/`-H` are unconditional targets; `--max-edge N` is a *cap* that never enlarges and fits inside a square box so it caps the longest edge whichever way the video is turned. Both properties are load-bearing for the Finder presets, which are applied to whatever was selected rather than to a file the user sized by hand: without the `min()` on each axis, `force_original_aspect_ratio=decrease` scales a small input *up* to fill the box; without the square box, "720p" cuts portrait phone video to 406x720 while leaving landscape at 1280x720. `force_divisible_by=2` is not decoration either — 1918x1080 capped at 1280 derives an odd height, and yuv420p cannot store one, so the encode fails outright.
 - All ffmpeg commands include `-y` to avoid interactive stalls.
 
 ## Architecture
@@ -71,6 +81,15 @@ Modules under `vidtools/`:
 
 Three call sites legitimately need the *undecoded* original — `strip_image_metadata` plus the two inspectors (`get_image_info`, `describe_color_profile`), which must not transpose what they report on. They open via **`_open_raw`**, which shares `_open_image`'s hostile-input error translation without applying orientation or ICC. Never call bare `Image.open`: PIL's own exceptions (`DecompressionBombError`, `UnidentifiedImageError`) are not caught by `main()` and reach the user as a traceback printing absolute paths.
 - **compress.py** — measured format *and* quality search for images. Encodes candidates with Pillow (no `cwebp`/`avifenc`/`oxipng` subprocesses), scores each against the original with SSIM, and writes the smallest that meets the fidelity target. Full-image SSIM is authoritative; the high-variance probe crop only narrows the starting bracket and can never veto a candidate (it vetoed 7 of 18 real images before 0.18.0). Defaults to PNG/JPEG/WebP — AVIF compresses roughly 2x better but no major vision API decodes it, so it's opt-in behind `--allow-avif` (naming a `.avif` output implies the flag). A content classifier (flat-run fraction + hard-edge density) raises the target to `FLAT_TARGET_SSIM` for text/line art, whose ringing SSIM barely registers. Caveat stated in the module docstring: SSIM is a mediocre perceptual metric, chosen because it's computable with numpy alone and is monotonic in encode quality. Opens via `_open_image`, so EXIF orientation is applied and the ICC profile is carried into every candidate encode — it went through a bare `Image.open` until 0.21.0, which rendered portrait phone photos sideways.
+
+  **`_unique_path` sets a project-wide convention, not a local one:** a
+  *derived* output never replaces an existing file, and the counter starts at 2
+  so the second result reads `<stem>-2<ext>`. `macos/compress-video.sh`
+  implements the same rule in shell and must keep the same spelling — it
+  shipped with a counter starting at 1 and overwriting previous runs, which
+  contradicted both this function and the README paragraph documenting it. An
+  output the caller *names* is still overwritten; auto-renaming what was asked
+  for would break scripts.
 - **audio_ops.py** — FFmpeg audio operations including two-pass loudnorm in `normalize_audio` and the single-pass vocal cleanup chain in `clean_audio`.
 - **separation.py** — Audio source separation behind a `SeparationBackend` Protocol. Current backend (`AudioSeparatorBackend`) wraps `audio-separator`. Optional extra: `uv sync --extra separation`. Caches the loaded model by `(model_name, output_dir)` so back-to-back calls don't reload weights.
 - **utils.py** — `run_ffmpeg(command)`, plus the ffmpeg **capability probe**
@@ -334,6 +353,17 @@ nothing there, since the contents are always exactly what we wrote.
 keeps `rm -rf` from drifting back in. The `rm -f` calls in the two action
 scripts are single named temp files (the encode target and the `mktemp` error
 file) and are fine.
+
+`remove_generated_bundle()`'s contract is **non-zero means something was left
+behind**, and it is easy to break by accident: an early `[ -d "$dir" ] || return
+0` reported a plain file sitting at the bundle path as *removed*. Distinguish
+"not there" (success) from "there but not ours" (refuse). It also takes
+`${1:-}`, not `$1` — an unbound positional under `set -u` aborts the caller, and
+one caller is the EXIT trap.
+
+It hardcodes the two filenames `make_workflow.py` writes. That coupling is real
+but covered: adding a third generated file turns four installer tests red rather
+than silently degrading uninstall into "left in place".
 
 It also runs the venv's own `python3`, not PATH's. The venv is a hard precondition by that point, so its interpreter is the one guaranteed to exist; PATH's `python3` is whatever happens to be first.
 

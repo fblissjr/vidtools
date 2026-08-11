@@ -195,7 +195,7 @@ class TestResizeMaxEdgeReal:
         """Claim: deleting this lets the cap be implemented as a height cap.
 
         A height cap reads correctly on landscape and mangles portrait -- phone
-        video at `-H 720` comes out 405x720, a far harsher cut than the same
+        video at `-H 720` comes out 406x720, a far harsher cut than the same
         number does to a landscape clip. Right-clicking a video should not mean
         something different depending on which way the phone was held."""
         src = self._clip(tmp_path, "p.mp4", "360x640")
