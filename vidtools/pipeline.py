@@ -7,7 +7,7 @@ subtitles (filter chain), and convert (terminal codec/quality).
 
 Excluded: concat (multiple inputs), slideshow (its own pipeline),
 extract-audio/extract-frames (different output type), add-audio (multiple
-inputs), preset (already a recipe), and audio/image-only operations.
+inputs), and audio/image-only operations.
 """
 
 from dataclasses import dataclass
@@ -43,7 +43,7 @@ _PIPELINE_OPS = set(_FILTER_BUILDERS) | {"cut", "convert"}
 
 _EXCLUDED_OPS = {
     "concat", "slideshow", "extract-audio", "extract-frames",
-    "add-audio", "preset", "info",
+    "add-audio", "info",
 }
 
 

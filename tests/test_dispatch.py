@@ -217,6 +217,34 @@ class TestPipelineConvertFlags:
         assert steps[0].params["start"] == "5"
 
 
+class TestPipelineStepFlagsMatchTopLevel:
+    """Claim: a pipeline step parses its flags exactly as the verb it names.
+
+    `_make_step_parser` used to redeclare resize and crop by hand, and the copy
+    drifted: `--algorithm` lost its choices, so a typo reached ffmpeg as a
+    filter-parse error, and the sizing flags lost their mutual exclusion, so
+    `resize -p 0.5 -W 640` silently used one and ignored the other.
+    """
+
+    def test_resize_rejects_unknown_algorithm(self):
+        with pytest.raises(SystemExit):
+            _parse_pipeline_steps(["resize", "-p", "0.5", "--algorithm", "lanczoss"])
+
+    def test_resize_sizing_flags_are_mutually_exclusive(self):
+        with pytest.raises(SystemExit):
+            _parse_pipeline_steps(["resize", "-p", "0.5", "-W", "640"])
+
+    def test_resize_requires_a_sizing_flag(self):
+        with pytest.raises(SystemExit):
+            _parse_pipeline_steps(["resize", "--algorithm", "bicubic"])
+
+    def test_resize_and_crop_still_parse(self):
+        steps = _parse_pipeline_steps(["resize", "--max-edge", "1280", "--algorithm", "bicubic",
+                                       "crop", "-W", "80", "-H", "60", "-x", "4"])
+        assert steps[0].params == {"max_edge": 1280, "algorithm": "bicubic"}
+        assert steps[1].params == {"width": 80, "height": 60, "x": 4, "y": 0}
+
+
 class TestMissingFuncDoesNotCrash:
     def test_handle_command_survives_missing_func(self):
         import argparse as _ap

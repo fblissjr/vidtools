@@ -136,6 +136,36 @@ def _add_time_range(parser):
     grp.add_argument("--duration", help="Duration from the start time")
 
 
+_SCALE_ALGORITHMS = ["neighbor", "fast_bilinear", "bilinear", "bicubic", "experimental",
+                     "area", "bicubiclina", "gauss", "sinc", "lanczos", "spline"]
+
+
+# Resize and crop flags are declared once and shared by the top-level verb and
+# the pipeline step of the same name. The step used to redeclare them by hand
+# and drifted: `--algorithm` lost its choices and the sizing flags lost their
+# mutual exclusion.
+def _add_resize_flags(parser):
+    """Add the sizing group (exactly one of -p/-W/-H/--max-edge) and --algorithm."""
+    grp = parser.add_mutually_exclusive_group(required=True)
+    grp.add_argument("-p", "--percentage", type=float, help="Scale by factor (e.g. 0.5)")
+    grp.add_argument("-W", "--width", type=int, help="Target width")
+    grp.add_argument("-H", "--height", type=int, help="Target height")
+    grp.add_argument("--max-edge", dest="max_edge", type=int, metavar="N",
+                     help="Cap the longest side at N. Never enlarges, and works the\n"
+                          "same on portrait and landscape -- unlike -W/-H, which are\n"
+                          "unconditional and orientation-dependent.")
+    parser.add_argument("--algorithm", default="lanczos", choices=_SCALE_ALGORITHMS,
+                        help="Scaling algorithm (default: lanczos)")
+
+
+def _add_crop_flags(parser):
+    """Add the crop rectangle: -W/-H required, -x/-y offsets default 0."""
+    parser.add_argument("-W", "--width", type=int, required=True, help="Crop width")
+    parser.add_argument("-H", "--height", type=int, required=True, help="Crop height")
+    parser.add_argument("-x", type=int, default=0, help="X offset (default: 0)")
+    parser.add_argument("-y", type=int, default=0, help="Y offset (default: 0)")
+
+
 def _audio_verb(run_audio_op):
     """Adapt an audio operation so the verb also works on video inputs.
 
@@ -259,20 +289,7 @@ Examples:
         "resize", help="Resize a video or image (aspect-preserving)",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    grp = resize.add_mutually_exclusive_group(required=True)
-    grp.add_argument("-p", "--percentage", type=float, help="Scale by factor (e.g. 0.5)")
-    grp.add_argument("-W", "--width", type=int, help="Target width")
-    grp.add_argument("-H", "--height", type=int, help="Target height")
-    grp.add_argument("--max-edge", dest="max_edge", type=int, metavar="N",
-                     help="Cap the longest side at N. Never enlarges, and works the\n"
-                          "same on portrait and landscape -- unlike -W/-H, which are\n"
-                          "unconditional and orientation-dependent.")
-    resize.add_argument(
-        "--algorithm", default="lanczos",
-        choices=["neighbor", "fast_bilinear", "bilinear", "bicubic", "experimental",
-                 "area", "bicubiclina", "gauss", "sinc", "lanczos", "spline"],
-        help="Scaling algorithm (default: lanczos)",
-    )
+    _add_resize_flags(resize)
     _add_preserve_metadata(resize)
     _add_io(resize)
     def _resize_video(args):
@@ -292,10 +309,7 @@ Examples:
         "crop", help="Crop a video or image to W:H at offset x,y",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    crop.add_argument("-W", "--width", type=int, required=True, help="Crop width")
-    crop.add_argument("-H", "--height", type=int, required=True, help="Crop height")
-    crop.add_argument("-x", type=int, default=0, help="X offset (default: 0)")
-    crop.add_argument("-y", type=int, default=0, help="Y offset (default: 0)")
+    _add_crop_flags(crop)
     _add_preserve_metadata(crop)
     _add_io(crop)
     def _crop_video(args):
@@ -926,16 +940,9 @@ def _make_step_parser(op: str) -> argparse.ArgumentParser:
         p.add_argument("--duration", dest="duration")
         p.add_argument("--fast-seek", dest="fast_seek", action="store_true")
     elif op == "resize":
-        p.add_argument("-p", "--percentage", type=float)
-        p.add_argument("-W", "--width", type=int)
-        p.add_argument("-H", "--height", type=int)
-        p.add_argument("--max-edge", dest="max_edge", type=int)
-        p.add_argument("--algorithm", default="lanczos")
+        _add_resize_flags(p)
     elif op == "crop":
-        p.add_argument("-W", "--width", type=int, required=True)
-        p.add_argument("-H", "--height", type=int, required=True)
-        p.add_argument("-x", type=int, default=0)
-        p.add_argument("-y", type=int, default=0)
+        _add_crop_flags(p)
     elif op == "rotate":
         p.add_argument("-r", "--rotation", required=True,
                        choices=["90", "180", "270", "-90"])
