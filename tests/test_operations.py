@@ -107,15 +107,65 @@ class TestApplyPresetValidation:
 
 
 class TestGetVideoInfo:
-    def test_returns_dict(self, tmp_path):
-        """get_video_info should return a dict, not print to stdout."""
-        # Can't test with a real file without ffprobe, so just verify the
-        # function signature returns a dict (not None).
-        # This would fail with subprocess.CalledProcessError on a fake file,
-        # which is expected -- we're testing the contract, not ffprobe.
-        with pytest.raises(Exception):
-            # Should raise because file doesn't exist, not return None
-            get_video_info(str(tmp_path / "nonexistent.mp4"))
+    @pytest.mark.ffmpeg
+    def test_unreadable_input_raises_ffmpeg_error(self, tmp_path):
+        """Claim: deleting the translation lets `vidtools info broken.mp4` crash.
+
+        `main()` catches `FfmpegError` and `ValueError` only. ffprobe's
+        `CalledProcessError` escaped it as a traceback that also printed the
+        absolute input path. `match-duration` probes through here too."""
+        broken = tmp_path / "broken.mp4"
+        broken.write_bytes(b"not a video")
+        with pytest.raises(FfmpegError, match="broken.mp4"):
+            get_video_info(str(broken))
+
+    def test_missing_ffprobe_raises_ffmpeg_error(self, monkeypatch):
+        """A missing binary is a FileNotFoundError, which also escaped `main()`."""
+        def _missing(*_a, **_kw):
+            raise FileNotFoundError("ffprobe")
+        monkeypatch.setattr("vidtools.video_ops.subprocess.run", _missing)
+        with pytest.raises(FfmpegError, match="ffprobe"):
+            get_video_info("in.mp4")
+
+
+class TestSlideshowOrientation:
+    """Claim: a bare `Image.open` renders portrait phone photos sideways.
+
+    `create_slideshow` sized the video from, and rendered, the stored pixel
+    buffer rather than what the photo displays as -- the same defect `compress`
+    had until 0.21.0. The processed frames only exist inside the temp dir while
+    ffmpeg runs, so they are inspected from the stubbed `run_ffmpeg`.
+    """
+
+    def _frames_seen_by_ffmpeg(self, monkeypatch):
+        from PIL import Image
+        seen = []
+
+        def _inspect(cmd):
+            list_file = cmd[cmd.index("-i") + 1]
+            first = Path(list_file).read_text().splitlines()[0]
+            frame = first.removeprefix("file '").removesuffix("'")
+            with Image.open(frame) as img:
+                seen.append((img.size, img.convert("RGB").getpixel((img.width // 2, 5))))
+        monkeypatch.setattr("vidtools.video_ops.run_ffmpeg", _inspect)
+        return seen
+
+    def test_output_size_follows_displayed_orientation(self, oriented_jpeg, tmp_path, monkeypatch):
+        from vidtools.operations import create_slideshow
+        seen = self._frames_seen_by_ffmpeg(monkeypatch)
+        create_slideshow(oriented_jpeg, str(tmp_path / "out.mp4"), duration_per_image=1)
+        size, _ = seen[0]
+        assert size == (200, 400), f"sized from the raw buffer: {size}"
+
+    def test_frame_pixels_are_upright(self, oriented_jpeg, tmp_path, monkeypatch):
+        """Size alone passes if only the probe is fixed; the red band must be
+        along the top, where the photo displays it."""
+        from vidtools.operations import create_slideshow
+        seen = self._frames_seen_by_ffmpeg(monkeypatch)
+        create_slideshow(oriented_jpeg, str(tmp_path / "out.mp4"),
+                         duration_per_image=1, size="200x400")
+        _, top_middle = seen[0]
+        assert top_middle[0] > 200 and top_middle[1] < 60, f"top edge is {top_middle}"
 
 
 class TestAddAudioValidation:

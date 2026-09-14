@@ -94,9 +94,15 @@ class TestGetAudioInfo:
         info = get_audio_info(str(v))
         assert all(s["codec_type"] == "audio" for s in info["streams"])
 
-    def test_missing_file_raises(self, tmp_path):
-        with pytest.raises(Exception):
-            get_audio_info(str(tmp_path / "nope.wav"))
+    def test_unreadable_input_raises_ffmpeg_error(self, tmp_path):
+        """`pytest.raises(Exception)` accepted the raw `CalledProcessError`
+        that `main()` does not catch -- so `vidtools info broken.mp3` crashed
+        with a traceback while this test stayed green."""
+        from vidtools.progress import FfmpegError
+        broken = tmp_path / "broken.wav"
+        broken.write_bytes(b"not audio")
+        with pytest.raises(FfmpegError, match="broken.wav"):
+            get_audio_info(str(broken))
 
 
 class TestEncoderCapabilityGuard:

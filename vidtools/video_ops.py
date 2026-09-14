@@ -2,7 +2,6 @@ import platform
 import subprocess
 import re
 import os
-import orjson
 import glob
 import tempfile
 from pathlib import Path
@@ -10,11 +9,11 @@ from PIL import Image, ImageOps
 import numpy as np
 
 from .utils import (
-    run_ffmpeg, logger, VIDEO_EXTS, AUDIO_EXTS,
+    run_ffmpeg, logger, probe_json, VIDEO_EXTS, AUDIO_EXTS,
     _ffmpeg_has_filter, _ffmpeg_has_encoder, require_encoder,
 )
 from .progress import FfmpegError
-from .image_ops import convert_image
+from .image_ops import _open_image, convert_image
 from .audio_ops import AUDIO_CODEC_MAP, _auto_codec
 from .audio_ops import _add_metadata_policy as _add_audio_metadata_policy
 from . import presets
@@ -403,9 +402,7 @@ def rotate_video(input_file, output_file, rotation, preserve_metadata=False):
 
 def get_video_info(input_file):
     """Gets video information using ffprobe."""
-    command = ["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", input_file]
-    result = subprocess.run(command, capture_output=True, text=True, check=True)
-    return orjson.loads(result.stdout)
+    return probe_json(input_file)
 
 
 _PRESET_KEY_MAP = {
@@ -433,9 +430,8 @@ def apply_preset(input_file, output_file, preset_name):
 
 
 def _probe_dimensions(path: str) -> tuple[int, int]:
-    """Return (width, height) of a media file."""
-    with Image.open(path) as img:
-        return img.size
+    """Return an image's (width, height) as displayed, EXIF orientation applied."""
+    return _open_image(path).size
 
 
 def sanitize_video(*, input_file: str, output_file: str, limit: int = 24, noise: int = 6, crf: int = 22,
@@ -578,7 +574,10 @@ def create_slideshow(image_pattern: str, output_file: str, duration_per_image: f
 
         logger.info("Preprocessing images with Pillow")
         for i, img_path in enumerate(image_files):
-            img = Image.open(img_path).convert("RGB")
+            # Through the imaging core, not a bare Image.open: a portrait phone
+            # photo is a landscape buffer plus an orientation tag, and the
+            # slideshow rendered the buffer -- sideways.
+            img = _open_image(img_path).convert("RGB")
 
             # --- Stage 1: Sanitization with PIL/Numpy ---
             if sanitize_crop:

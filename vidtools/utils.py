@@ -1,6 +1,7 @@
 import subprocess
 import os
 import re
+import orjson
 import structlog
 from .progress import report_progress, FfmpegError
 
@@ -79,6 +80,26 @@ def is_valid_file(parser, arg):
     if not os.path.isfile(arg):
         parser.error(f"Error: '{arg}' is not a file.")
     return arg
+
+
+def probe_json(input_file: str, *extra_args: str) -> dict:
+    """Run ffprobe's JSON stream/format report on `input_file`.
+
+    Every failure becomes `FfmpegError`. `check=True` used to leak
+    `CalledProcessError` (and a missing binary leaked `FileNotFoundError`), and
+    `main()` catches neither, so `vidtools info` on an unreadable file crashed
+    with a traceback quoting the absolute path.
+    """
+    command = ["ffprobe", "-v", "error", "-show_format", "-show_streams",
+               *extra_args, "-of", "json", input_file]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except FileNotFoundError as e:
+        raise FfmpegError("ffprobe not found. Ensure ffmpeg is installed and in PATH.") from e
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"exit code {result.returncode}"
+        raise FfmpegError(f"ffprobe could not read '{input_file}': {detail}")
+    return orjson.loads(result.stdout)
 
 
 def _parse_ffmpeg_time(time_str: str) -> float:

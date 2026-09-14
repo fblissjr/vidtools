@@ -4,7 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from .utils import run_ffmpeg, logger, require_encoder
+from .utils import run_ffmpeg, logger, probe_json, require_encoder
 from .progress import report_progress
 
 # Map output extension to ffmpeg audio codec
@@ -168,11 +168,7 @@ def mix_audio(input_files: list[str], output_file: str, preserve_metadata: bool 
 
 def get_audio_info(input_file: str) -> dict:
     """Get audio file metadata using ffprobe."""
-    import orjson
-    command = ["ffprobe", "-v", "error", "-show_format", "-show_streams",
-               "-select_streams", "a", "-of", "json", input_file]
-    result = subprocess.run(command, capture_output=True, text=True, check=True)
-    return orjson.loads(result.stdout)
+    return probe_json(input_file, "-select_streams", "a")
 
 
 def fade_audio(input_file: str, output_file: str, preserve_metadata: bool = False,
