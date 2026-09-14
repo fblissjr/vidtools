@@ -14,8 +14,8 @@ invocations that actually need it.
 **On macOS, `brew install ffmpeg` is not enough for every verb.** Homebrew's
 `ffmpeg` formula is the slim one and omits libass, libaom-av1, libvorbis and
 libwebp. That means `subtitles` burn-in is unavailable (it reports this clearly
-rather than failing cryptically), and the `av1_quality` preset and `.ogg` output
-will fail. WebP is unaffected — images encode through PIL, not ffmpeg.
+rather than failing cryptically), and `--video-codec libaom-av1` and `.ogg`
+output will fail. WebP is unaffected — images encode through PIL, not ffmpeg.
 
 `ffmpeg-full` is the batteries-included build, but it is **keg-only**, so
 Homebrew deliberately does not link it and installing alone changes nothing:
@@ -247,15 +247,6 @@ generation prompt turned up in the video case.
 its output is an audio file: title and artist survive, location and comment are
 blanked. `extract-frames` and `slideshow` strip.
 
-### Presets
-
-```bash
-vidtools preset list
-vidtools preset apply in.mp4 out.mp4 compress_web
-```
-
-Built-in presets include `compress_web`, `audio_only_mp3`, `gif_optimized`, `resize_half`, `hq_h264_mp4`, `mobile_friendly_mp4`, `webm_social_media`, `hevc_quality` (libx265), `av1_quality` (libaom-av1).
-
 ### Hardware acceleration
 
 ```bash
@@ -460,7 +451,6 @@ vidtools/
   progress.py        # thread-local progress sink + FfmpegError
   pipeline.py        # Pipeline chaining (single ffmpeg invocation)
   ytdlp.py           # yt-dlp wrapper
-  presets.py         # Preset management with mtime cache
 data/                # Output and temp files -- gitignored except .gitkeep
 tests/               # run: uv run pytest tests/ -v
 ```

@@ -55,7 +55,7 @@ in this codebase, all verified against a slim build:
 
 - `subtitles` burn-in needs libass and is unavailable; `add_subtitles` checks for
   the filter and says so rather than emitting a filter-parse error naming no cause.
-- The `av1_quality` preset needs libaom-av1, and `.ogg` output needs libvorbis.
+- `--video-codec libaom-av1` needs libaom-av1, and `.ogg` output needs libvorbis.
   Both are capability-checked via `utils.require_encoder`, which names the gap
   and points at `ffmpeg-full`.
 - libwebp is already routed around: `screenshot` and `compress` encode WebP
@@ -112,7 +112,6 @@ Three call sites legitimately need the *undecoded* original — `strip_image_met
   - `download()` — standard URL download (mp3/wav/mp4) with percent-based progress.
   - `download_live()` — live-broadcast capture (mp4-only). Polls for the show to start (`--wait-for-video`), records from second 0 (`--live-from-start`), survives network blips (`--retries infinite --fragment-retries infinite`). Reports fragment-based progress (throttled to every 5th fragment so multi-hour streams don't emit thousands of progress events).
   - Shared `_run_ytdlp_process(cmd, on_line)` helper handles subprocess lifecycle including graceful Ctrl-C (SIGTERM → yt-dlp finalizes/remuxes the partial file).
-- **presets.py** — Preset management with mtime-based cache. JSON file at `presets/ffmpeg_presets.json`.
 
 ## Key patterns
 
@@ -469,7 +468,6 @@ Full analysis, the isolation procedure, and the standalone script live in `inter
 - GIF conversion uses palette generation for quality.
 - Replaced deprecated `-async 1` with `-af aresample=async=1`.
 - Hardware acceleration: `--hwaccel` flag uses VideoToolbox on macOS (h264_videotoolbox / hevc_videotoolbox).
-- Modern codec presets available: `hevc_quality` (libx265), `av1_quality` (libaom-av1).
 - Single-frame grab (`screenshot`): ffmpeg extracts one lossless frame via `_grab_frame`; PIL re-encodes jpg/webp through `image_ops.convert_image` (one quality scale 1-100, and works even when ffmpeg is built without libwebp). Fast input `-ss` by default, output `-ss` for `--accurate`. **Gotcha:** when `-ss` overshoots the input, ffmpeg's image2 muxer writes zero frames and still exits 0, so `_grab_frame` verifies a non-empty file was produced and raises `FfmpegError` otherwise (without this, png grabs silently produce nothing and lossy grabs raise a cryptic PIL error).
 - Always work with the latest ffmpeg documentation and features.
 

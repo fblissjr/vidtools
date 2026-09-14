@@ -16,7 +16,6 @@ from .progress import FfmpegError
 from .image_ops import _open_image, convert_image
 from .audio_ops import AUDIO_CODEC_MAP, _auto_codec
 from .audio_ops import _add_metadata_policy as _add_audio_metadata_policy
-from . import presets
 
 # --- Codec defaults ---
 
@@ -110,8 +109,8 @@ def _apply_encode_options(command: list, video_codec: str | None, audio_codec: s
                           crf: int | None, hwaccel: bool):
     """Append video/audio encoder + quality flags. Handles hwaccel and crf=0 (lossless)."""
     encoder = _get_video_encoder(video_codec or DEFAULT_VIDEO_CODEC, hwaccel)
-    # Catches the av1_quality / hevc_quality presets on a build without
-    # libaom-av1 / libx265, which is the default Homebrew install.
+    # Catches `--video-codec libaom-av1` / `libx265` on a build without them,
+    # which is the default Homebrew install.
     require_encoder(encoder)
     command.extend(["-c:v", encoder, "-c:a", audio_codec or DEFAULT_AUDIO_CODEC])
     if hwaccel:
@@ -225,7 +224,7 @@ def convert_format(input_file, output_file, format_type, video_codec=None, audio
         encoder = _get_video_encoder(video_codec or DEFAULT_VIDEO_CODEC, hwaccel)
         # convert_format builds -c:v itself rather than going through
         # _apply_encode_options, so the guard is needed on both paths. This is
-        # the one the av1_quality / hevc_quality presets take.
+        # the one `convert --video-codec libaom-av1` takes.
         require_encoder(encoder)
         command.extend(["-c:v", encoder])
         command.extend(["-c:a", audio_codec or DEFAULT_AUDIO_CODEC])
@@ -403,30 +402,6 @@ def rotate_video(input_file, output_file, rotation, preserve_metadata=False):
 def get_video_info(input_file):
     """Gets video information using ffprobe."""
     return probe_json(input_file)
-
-
-_PRESET_KEY_MAP = {
-    "format": "format_type", "vcodec": "video_codec", "acodec": "audio_codec",
-    "quality": "quality_scale", "vbitrate": "video_bitrate", "abitrate": "audio_bitrate",
-}
-_PRESET_IGNORE = {"description", "resize_percentage"}
-
-
-def apply_preset(input_file, output_file, preset_name):
-    """Applies a preset configuration."""
-    all_presets = presets.get_presets()
-    if preset_name not in all_presets:
-        raise ValueError(f"Preset '{preset_name}' not found.")
-    preset = all_presets[preset_name]
-    if "resize_percentage" in preset:
-        resize_video(input_file, output_file, percentage=preset["resize_percentage"])
-    else:
-        kwargs = {}
-        for k, v in preset.items():
-            if k in _PRESET_IGNORE or v is None:
-                continue
-            kwargs[_PRESET_KEY_MAP.get(k, k)] = v
-        convert_format(input_file, output_file, **kwargs)
 
 
 def _probe_dimensions(path: str) -> tuple[int, int]:

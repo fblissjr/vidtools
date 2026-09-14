@@ -138,34 +138,6 @@ def normalize_audio(input_file: str, output_file: str, target_loudness: float = 
     run_ffmpeg(command)
 
 
-def mix_audio(input_files: list[str], output_file: str, preserve_metadata: bool = False,
-              volumes: list[float] | None = None):
-    """Mix multiple audio files together using amix filter."""
-    if len(input_files) < 2:
-        raise ValueError("mix_audio requires at least 2 input files")
-
-    command = ["ffmpeg", "-y"]
-    for f in input_files:
-        command.extend(["-i", f])
-
-    n = len(input_files)
-    if volumes:
-        # Apply volume adjustment per input, then mix
-        vol_parts = []
-        for i, vol in enumerate(volumes):
-            vol_parts.append(f"[{i}:a]volume={vol}[a{i}]")
-        mix_inputs = "".join(f"[a{i}]" for i in range(n))
-        filter_expr = ";".join(vol_parts) + f";{mix_inputs}amix=inputs={n}:normalize=0"
-    else:
-        mix_inputs = "".join(f"[{i}:a]" for i in range(n))
-        filter_expr = f"{mix_inputs}amix=inputs={n}:normalize=0"
-
-    command.extend(["-filter_complex", filter_expr, "-vn"])
-    _add_metadata_policy(command, preserve_metadata)
-    command.append(output_file)
-    run_ffmpeg(command)
-
-
 def get_audio_info(input_file: str) -> dict:
     """Get audio file metadata using ffprobe."""
     return probe_json(input_file, "-select_streams", "a")
@@ -200,23 +172,6 @@ def resample_audio(input_file: str, output_file: str, sample_rate: int = 44100,
     _add_metadata_policy(command, preserve_metadata)
     command.append(output_file)
     run_ffmpeg(command)
-
-
-def detect_silence(input_file: str, threshold: int = -30,
-                   min_duration: float = 0.5) -> list[tuple[float, float]]:
-    """Detect silence ranges in audio. Returns list of (start, end) tuples."""
-    command = [
-        "ffmpeg", "-i", input_file,
-        "-af", f"silencedetect=noise={threshold}dB:d={min_duration}",
-        "-f", "null", "-"
-    ]
-    result = subprocess.run(command, capture_output=True, text=True)
-    stderr = result.stderr
-
-    starts = [float(m.group(1)) for m in re.finditer(r'silence_start:\s*([\d.]+)', stderr)]
-    ends = [float(m.group(1)) for m in re.finditer(r'silence_end:\s*([\d.]+)', stderr)]
-
-    return list(zip(starts, ends[:len(starts)]))
 
 
 def clean_audio(input_file: str, output_file: str, *,
@@ -271,19 +226,6 @@ def clean_audio(input_file: str, output_file: str, *,
     elif codec == "libmp3lame":
         # VBR ~190 kbps, matches the recipe; only valid for libmp3lame
         command.extend(["-q:a", "2"])
-    _add_metadata_policy(command, preserve_metadata)
-    command.append(output_file)
-    run_ffmpeg(command)
-
-
-def remove_silence(input_file: str, output_file: str,
-                   threshold: int = -30, min_duration: float = 0.5,
-                   preserve_metadata: bool = False):
-    """Remove silence from audio using silenceremove filter."""
-    command = [
-        "ffmpeg", "-y", "-i", input_file, "-vn",
-        "-af", f"silenceremove=stop_periods=-1:stop_duration={min_duration}:stop_threshold={threshold}dB",
-    ]
     _add_metadata_policy(command, preserve_metadata)
     command.append(output_file)
     run_ffmpeg(command)

@@ -9,7 +9,6 @@ from . import operations
 from .compress import DEFAULT_TARGET_SSIM, FIT_PROFILES, compress_image
 from . import image_ops
 from . import audio_ops
-from . import presets
 from . import ytdlp
 
 
@@ -834,29 +833,6 @@ decodes it, so it is opt-in via --allow-avif.""",
 
     # ══════════════════════════════════════════════════════════════ META ═════
 
-    # ---------------------------------------------------------------- preset
-    preset_parser = subparsers.add_parser("preset", help="Manage and apply presets")
-    # `vidtools preset` with no sub-action prints help instead of crashing on args.func.
-    preset_parser.set_defaults(func=lambda _args: preset_parser.print_help())
-    preset_sub = preset_parser.add_subparsers(dest="preset_action")
-
-    apply = preset_sub.add_parser("apply", help="Apply a preset")
-    apply.add_argument("input", type=lambda x: is_valid_file(apply, x))
-    apply.add_argument("output")
-    apply.add_argument("name", help="Preset name")
-    apply.set_defaults(func=lambda args: operations.apply_preset(args.input, args.output, args.name))
-
-    list_p = preset_sub.add_parser("list", help="List available presets")
-    list_p.set_defaults(func=lambda _args: presets.list_presets())
-
-    delete = preset_sub.add_parser("delete", help="Delete a preset")
-    delete.add_argument("name", help="Preset name")
-    delete.set_defaults(func=lambda args: presets.delete_preset(args.name))
-
-    edit = preset_sub.add_parser("edit", help="Edit preset file")
-    edit.add_argument("name", help="Preset name")
-    edit.set_defaults(func=lambda args: presets.edit_preset_command(args.name))
-
     # ---------------------------------------------------------------- dl-live
     dl_live = subparsers.add_parser(
         "dl-live", help="Record a YouTube/HLS live broadcast",
@@ -905,7 +881,7 @@ Examples:
   vidtools pipeline in.mp4 out.mp4 crop -W 800 -H 600 -x 100 -y 50 rotate -r 90
 
 Supported steps: trim (alias cut), resize, crop, rotate, sanitize, subtitles, convert.
-NOT supported: concat, slideshow, extract-*, add-audio, preset.
+NOT supported: concat, slideshow, extract-*, add-audio.
 
 Step order is preserved in the filter chain. trim input args are pulled before
 the input file regardless of position. convert is always terminal."""
@@ -1037,7 +1013,7 @@ def _make_cli_sink():
 
 def handle_command(args: argparse.Namespace) -> None:
     from .progress import progress_context
-    # A bare command with sub-actions (e.g. `preset`) may leave func unset.
+    # A namespace built outside the parser may carry a command but no func.
     if args.command and getattr(args, "func", None) is not None:
         with progress_context(_make_cli_sink()):
             args.func(args)

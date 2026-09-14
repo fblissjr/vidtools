@@ -8,7 +8,6 @@ from vidtools.progress import FfmpegError
 from vidtools.operations import (
     resize_video,
     rotate_video,
-    apply_preset,
     get_video_info,
     add_audio,
     sanitize_video,
@@ -98,12 +97,6 @@ class TestRotateVideoValidation:
     def test_raises_on_invalid_rotation(self):
         with pytest.raises(ValueError, match="Invalid rotation"):
             rotate_video("input.mp4", "output.mp4", "45")
-
-
-class TestApplyPresetValidation:
-    def test_raises_on_unknown_preset(self):
-        with pytest.raises(ValueError, match="not found"):
-            apply_preset("input.mp4", "output.mp4", "nonexistent_preset_xyz")
 
 
 class TestGetVideoInfo:
@@ -495,7 +488,7 @@ class TestNoProgressCallbackParam:
     OPS = [
         "resize_video", "cut_video", "convert_format", "extract_audio",
         "crop_video", "rotate_video", "concatenate_videos", "sanitize_video",
-        "create_slideshow", "apply_preset", "add_audio", "trim_to_audio",
+        "create_slideshow", "add_audio", "trim_to_audio",
     ]
 
     def test_no_progress_callback_in_signatures(self):
@@ -524,8 +517,7 @@ class TestNoProgressCallbackParam:
         import inspect
         from vidtools import audio_ops
         for name in ["convert_audio", "cut_audio", "normalize_audio",
-                     "mix_audio", "fade_audio", "resample_audio",
-                     "remove_silence"]:
+                     "fade_audio", "resample_audio", "clean_audio"]:
             fn = getattr(audio_ops, name)
             sig = inspect.signature(fn)
             assert "progress_callback" not in sig.parameters, (

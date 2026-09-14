@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from vidtools.audio_ops import (
-    convert_audio, cut_audio, normalize_audio, mix_audio,
+    convert_audio, cut_audio, normalize_audio,
     fade_audio, resample_audio, clean_audio,
     AUDIO_CODEC_MAP,
 )
@@ -147,16 +147,6 @@ class TestResampleAudio:
         assert cmd[idx + 1] == "22050"
 
 
-class TestMixAudio:
-    @patch("vidtools.audio_ops.run_ffmpeg")
-    def test_mix_two_files(self, mock_run):
-        mix_audio(["a.mp3", "b.mp3"], "output.mp3")
-        cmd = mock_run.call_args[0][0]
-        assert "-filter_complex" in cmd
-        idx = cmd.index("-filter_complex")
-        assert "amix" in cmd[idx + 1]
-
-
 class TestCleanAudio:
     """clean_audio chains highpass + afftdn + acompressor + loudnorm."""
 
@@ -290,7 +280,7 @@ class TestMetadataPolicy:
     """
 
     OPS = ["convert_audio", "cut_audio", "normalize_audio", "fade_audio",
-           "resample_audio", "clean_audio", "remove_silence"]
+           "resample_audio", "clean_audio"]
 
     def _call(self, name, kw):
         from vidtools import audio_ops
@@ -301,7 +291,6 @@ class TestMetadataPolicy:
             "fade_audio": lambda: audio_ops.fade_audio("i.mp3", "o.mp3", fade_in=1, **kw),
             "resample_audio": lambda: audio_ops.resample_audio("i.mp3", "o.mp3", **kw),
             "clean_audio": lambda: audio_ops.clean_audio("i.mp3", "o.mp3", **kw),
-            "remove_silence": lambda: audio_ops.remove_silence("i.mp3", "o.mp3", **kw),
         }[name]()
 
     @pytest.mark.parametrize("op", OPS)

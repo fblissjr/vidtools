@@ -217,13 +217,7 @@ class TestPipelineConvertFlags:
         assert steps[0].params["start"] == "5"
 
 
-class TestPresetNoActionDoesNotCrash:
-    """`vidtools preset` with no sub-action should print help, not AttributeError."""
-
-    def test_preset_has_default_func(self):
-        args = setup_argparse().parse_args(["preset"])
-        assert hasattr(args, "func")  # default handler set on the parent parser
-
+class TestMissingFuncDoesNotCrash:
     def test_handle_command_survives_missing_func(self):
         import argparse as _ap
         from vidtools.cli import handle_command
