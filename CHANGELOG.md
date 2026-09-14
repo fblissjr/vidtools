@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.30.0
+
+### Fixed
+- **`slideshow` renders portrait phone photos upright.** It opened images with a bare `Image.open`, so a photo stored as a landscape buffer plus an orientation tag was both sized and rendered sideways. It now goes through `_open_image`, like every other path that renders pixels.
+- **`vidtools info` on an unreadable file reports an error instead of crashing.** `get_video_info` and `get_audio_info` ran ffprobe with `check=True`, and the resulting `CalledProcessError` (or `FileNotFoundError` for a missing ffprobe) escaped `main()` as a traceback. Both now share `utils.probe_json`, which raises `FfmpegError`. `match-duration` probes through the same path.
+- **The pipeline `resize` step validates its flags like the `resize` verb.** It accepted any `--algorithm` string and let `-p`/`-W`/`-H`/`--max-edge` be combined, silently using one. The verb and the step now share one flag definition (`_add_resize_flags`, and `_add_crop_flags` for crop).
+
+### Removed
+- **The `preset` command** (`apply`/`list`/`delete`/`edit`), `apply_preset`, `vidtools/presets.py` and `presets/ffmpeg_presets.json`. It read and wrote a `presets/` folder relative to the current directory, creating stray folders wherever it ran and ignoring the repository's own preset file. `convert --quality`/`--video-codec` and the Finder presets cover the same ground.
+- **`mix_audio`, `detect_silence`, `remove_silence`.** Exported and tested, but no command reached them.
+- The tracked `data/` placeholder directories left over from the web UI; `data/` is now simply ignored.
+
+### Changed
+- `CLAUDE.md` now holds rules and traps only; the incidents behind them moved to a tracked `docs/history.md`.
+- Applied ruff's safe auto-fixes (import order, unused imports).
+
 ## 0.29.0
 
 ### Added
