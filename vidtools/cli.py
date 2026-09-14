@@ -140,8 +140,8 @@ def _audio_verb(run_audio_op):
     """Adapt an audio operation so the verb also works on video inputs.
 
     `run_audio_op(args, in_path, out_path)` runs the underlying audio op. The
-    audio-output-vs-video-remux routing lives in `apply_audio_op_keep_video`
-    (shared with the web `clean` dispatch), so e.g. `normalize clip.mp4 out.mp4`
+    audio-output-vs-video-remux routing lives in `apply_audio_op_keep_video`,
+    so e.g. `normalize clip.mp4 out.mp4`
     keeps the video and fixes the audio, while `... out.mp3` extracts audio."""
     def handler(args):
         operations.apply_audio_op_keep_video(

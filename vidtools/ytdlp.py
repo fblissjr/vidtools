@@ -112,7 +112,7 @@ def parse_ytdlp_live_progress(line: str) -> dict | None:
         frag = int(m.group(1))
         # Monotonic pseudo-percent capped at 99 -- never report "complete"
         # mid-stream. The message carries the real signal; percent just keeps
-        # the CLI/web bar visually pinned once we're past the warmup.
+        # the CLI bar visually pinned once we're past the warmup.
         return {"percent": min(99, frag), "message": f"Recording fragment {frag}"}
 
     if m := _LIVE_HLS_SEG_RE.search(line):

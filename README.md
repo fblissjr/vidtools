@@ -451,7 +451,6 @@ vidtools/
   progress.py        # thread-local progress sink + FfmpegError
   pipeline.py        # Pipeline chaining (single ffmpeg invocation)
   ytdlp.py           # yt-dlp wrapper
-data/                # Output and temp files -- gitignored except .gitkeep
 tests/               # run: uv run pytest tests/ -v
 ```
 

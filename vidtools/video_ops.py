@@ -668,8 +668,8 @@ def apply_audio_op_keep_video(input_file: str, output_file: str, audio_op):
         non-standard stream many players reject) and remux it over the original
         video, copying the video stream.
 
-    Shared by the CLI audio verbs (normalize/fade/resample/clean) and the web
-    `clean` dispatch so both behave identically on video inputs."""
+    Shared by the CLI audio verbs (normalize/fade/resample/clean) so all four
+    behave identically on video inputs."""
     in_ext = os.path.splitext(input_file)[1].lower()
     out_ext = os.path.splitext(output_file)[1].lower()
     if in_ext not in VIDEO_EXTS or out_ext in AUDIO_EXTS:

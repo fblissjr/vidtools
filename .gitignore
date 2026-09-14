@@ -1,15 +1,5 @@
-# Vidtools data
-data/*
-!data/.gitkeep
-!data/output/
-data/output/*
-!data/output/.gitkeep
-!data/temp/
-data/temp/*
-!data/temp/.gitkeep
-!data/uploads/
-data/uploads/*
-!data/uploads/.gitkeep
+# Local working data (formerly the web UI's upload/output dirs)
+data/
 internal/*
 !internal/.gitkeep
 !internal/log/
