@@ -283,8 +283,12 @@ def test_a_failed_swap_never_leaves_a_destroyed_bundle(fake_repo, services):
         assert present == {"document.wflow", "Info.plist"}, (
             f"bundle left incomplete after a failed swap: {sorted(present)}")
     finally:
-        # Must run, or tmp_path teardown cannot remove the tree.
-        subprocess.run(["chflags", "-R", "nouchg", str(bundle)], check=False)
+        # Must run, or tmp_path teardown cannot remove the tree. The whole
+        # Services dir, not just the bundle: the swap renames the old bundle --
+        # locked file and all -- to a `.previous` backup it cannot delete, so
+        # unlocking only the bundle path stranded that backup in pytest's
+        # temp root, undeletable, on every run.
+        subprocess.run(["chflags", "-R", "nouchg", str(services)], check=False)
 
 
 def test_cleanup_restores_the_bundle_even_when_the_staging_dir_cannot_be_removed(

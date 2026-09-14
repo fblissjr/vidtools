@@ -187,6 +187,23 @@ def test_directories_and_missing_files_are_skipped(harness, tmp_path):
     assert len(lines) == 1, f"expected one invocation, got {lines}"
 
 
+def test_selection_with_no_regular_files_says_nothing(harness, tmp_path):
+    """Claim: deleting the guard raises a critical alert reading "Could not
+    compress 0 file(s)".
+
+    A selection holding only a folder, a broken alias, or a file deleted between
+    the right-click and the run leaves both counters at zero, which the failure
+    branch read as total failure. The video action already had this guard."""
+    run, argfile = harness
+    (tmp_path / "adir").mkdir()
+    r = run("Balanced (WebP)", tmp_path / "adir", tmp_path / "nope.png")
+    assert r.returncode == 0, r.stderr
+    assert not argfile.exists(), "must not invoke the binary on non-files"
+    told = tmp_path / "notify.txt"
+    told = told.read_text() if told.exists() else ""
+    assert "0 file(s)" not in told, f"nonsense count shown: {told!r}"
+
+
 def test_missing_binary_fails_loudly(harness, tmp_path):
     """The action is welded to an absolute venv path. If the repo moves it must
     alert, not silently do nothing."""

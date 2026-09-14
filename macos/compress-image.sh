@@ -140,6 +140,15 @@ for f in "$@"; do
     /bin/rm -f "$errfile"
 done
 
+# Nothing selected was a regular file -- every entry was a directory, a broken
+# alias, or something deleted between the right-click and the run. Both counters
+# are still zero, so the failure branch below would fire a *critical* alert
+# reading "Could not compress 0 file(s)". Say nothing instead. Same guard as
+# compress-video.sh.
+if [ "$ok" -eq 0 ] && [ "$failed" -eq 0 ]; then
+    exit 0
+fi
+
 if [ "$ok" -eq 0 ]; then
     summary="Could not compress ${failed} file(s)."
     if [ -n "$first_error" ]; then

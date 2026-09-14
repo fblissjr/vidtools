@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.30.1
+
+### Fixed
+- **Compress Image no longer raises a critical "Could not compress 0 file(s)" alert** when the selection holds no regular files (only folders, a broken alias, or something deleted before the run). It now exits quietly, matching Compress Video, which already had this guard. Re-run `macos/install.sh` to pick it up.
+- **The test suite no longer strands an undeletable directory in pytest's temp root.** `test_a_failed_swap_never_leaves_a_destroyed_bundle` locks a file, and the install it drives moves that file into a `.previous` backup; the test only unlocked the bundle path, so every run left the backup behind and printed cleanup warnings.
+
 ## 0.30.0
 
 ### Fixed
