@@ -26,11 +26,11 @@ publishing coordinates nobody meant to publish.
 """
 
 import os
-from typing import Any
-
 import warnings
 from contextlib import contextmanager
-from PIL import Image, UnidentifiedImageError, ImageCms, ImageEnhance, ImageOps
+from typing import Any
+
+from PIL import Image, ImageCms, ImageEnhance, ImageOps, UnidentifiedImageError
 
 from .utils import logger
 

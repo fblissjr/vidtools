@@ -56,24 +56,27 @@ class TestEncoderCapabilityGuard:
     the gap rather than emit ffmpeg's 'Unknown encoder'."""
 
     def test_missing_encoder_names_the_gap(self):
+        import unittest.mock as m
+
         from vidtools import utils
         from vidtools.progress import FfmpegError
-        import unittest.mock as m
         with m.patch.object(utils, "_ffmpeg_has_encoder", lambda n: False):
             with pytest.raises(FfmpegError, match="libvorbis"):
                 utils.require_encoder("libvorbis")
 
     def test_present_encoder_passes(self):
-        from vidtools import utils
         import unittest.mock as m
+
+        from vidtools import utils
         with m.patch.object(utils, "_ffmpeg_has_encoder", lambda n: True):
             utils.require_encoder("libvorbis")  # must not raise
 
     def test_unprobeable_build_does_not_block(self):
         """None means 'could not ask'. Blocking there would turn a missing
         ffmpeg into a bogus 'missing codec' report."""
-        from vidtools import utils
         import unittest.mock as m
+
+        from vidtools import utils
         with m.patch.object(utils, "_ffmpeg_has_encoder", lambda n: None):
             utils.require_encoder("libvorbis")  # must not raise
 

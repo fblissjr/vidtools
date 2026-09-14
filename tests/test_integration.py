@@ -17,12 +17,15 @@ import subprocess
 
 import pytest
 
+from vidtools.audio_ops import cut_audio, normalize_audio
 from vidtools.operations import (
-    convert_format, screenshot, cut_video, resize_video,
+    convert_format,
+    cut_video,
     extract_audio,
     normalize_audio,
+    resize_video,
+    screenshot,
 )
-from vidtools.audio_ops import cut_audio, normalize_audio
 from vidtools.progress import FfmpegError
 
 pytestmark = pytest.mark.ffmpeg
@@ -236,6 +239,7 @@ class TestAudioVerbRemuxReal:
 
     def test_normalize_video_output_keeps_both_streams(self, media, tmp_path):
         from types import SimpleNamespace
+
         from vidtools.cli import _audio_verb
         out = str(tmp_path / "n.mp4")
         args = SimpleNamespace(input=media["clip"], output=out, target=-16.0)
@@ -247,6 +251,7 @@ class TestAudioVerbRemuxReal:
 
     def test_normalize_video_to_audio_output_extracts(self, media, tmp_path):
         from types import SimpleNamespace
+
         from vidtools.cli import _audio_verb
         out = str(tmp_path / "n.mp3")
         args = SimpleNamespace(input=media["clip"], output=out, target=-16.0)

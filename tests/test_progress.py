@@ -1,9 +1,14 @@
 """Tests for the thread-local progress sink."""
 import threading
+
 import pytest
+
 from vidtools.progress import (
-    set_progress_sink, report_progress, get_progress_sink,
-    progress_context, FfmpegError,
+    FfmpegError,
+    get_progress_sink,
+    progress_context,
+    report_progress,
+    set_progress_sink,
 )
 
 

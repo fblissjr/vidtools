@@ -1,21 +1,27 @@
-import platform
-import subprocess
-import re
-import os
 import glob
+import os
+import platform
+import re
+import subprocess
 import tempfile
 from pathlib import Path
-from PIL import Image, ImageOps
-import numpy as np
 
-from .utils import (
-    run_ffmpeg, logger, probe_json, VIDEO_EXTS, AUDIO_EXTS,
-    _ffmpeg_has_filter, _ffmpeg_has_encoder, require_encoder,
-)
-from .progress import FfmpegError
-from .image_ops import _open_image, convert_image
+import numpy as np
+from PIL import Image, ImageOps
+
 from .audio_ops import AUDIO_CODEC_MAP, _auto_codec
 from .audio_ops import _add_metadata_policy as _add_audio_metadata_policy
+from .image_ops import _open_image, convert_image
+from .progress import FfmpegError
+from .utils import (
+    AUDIO_EXTS,
+    VIDEO_EXTS,
+    _ffmpeg_has_filter,
+    logger,
+    probe_json,
+    require_encoder,
+    run_ffmpeg,
+)
 
 # --- Codec defaults ---
 
@@ -706,7 +712,7 @@ def create_srt_from_transcript(input_file: str, output_file: str):
         seconds, milliseconds = divmod(rem, 1000)
         return f"{hours:02}:{minutes:02}:{seconds:02},{milliseconds:03}"
 
-    with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
+    with open(input_file) as infile, open(output_file, 'w') as outfile:
         pattern = re.compile(r'\[(\d+\.?\d*)\s*-->\s*(\d+\.?\d*)\]\s*(.*)')
         subtitle_index = 1
         for line in infile:

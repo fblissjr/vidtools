@@ -4,19 +4,19 @@ from pathlib import Path
 
 import pytest
 
-from vidtools.progress import FfmpegError
 from vidtools.operations import (
-    resize_video,
-    rotate_video,
-    get_video_info,
     add_audio,
-    sanitize_video,
-    trim_to_audio,
-    screenshot,
     convert_format,
     extract_audio,
     extract_frames,
+    get_video_info,
+    resize_video,
+    rotate_video,
+    sanitize_video,
+    screenshot,
+    trim_to_audio,
 )
+from vidtools.progress import FfmpegError
 
 
 class TestResizeVideoValidation:
@@ -493,6 +493,7 @@ class TestNoProgressCallbackParam:
 
     def test_no_progress_callback_in_signatures(self):
         import inspect
+
         from vidtools import operations
         for name in self.OPS:
             fn = getattr(operations, name)
@@ -503,6 +504,7 @@ class TestNoProgressCallbackParam:
 
     def test_image_ops_no_progress_callback(self):
         import inspect
+
         from vidtools import image_ops
         for name in ["resize_image", "convert_image", "crop_image",
                      "create_thumbnail", "strip_image_metadata",
@@ -515,6 +517,7 @@ class TestNoProgressCallbackParam:
 
     def test_audio_ops_no_progress_callback(self):
         import inspect
+
         from vidtools import audio_ops
         for name in ["convert_audio", "cut_audio", "normalize_audio",
                      "fade_audio", "resample_audio", "clean_audio"]:

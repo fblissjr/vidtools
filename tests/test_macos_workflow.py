@@ -20,7 +20,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "macos"))
 import make_workflow  # noqa: E402
 
-
 # The keys Finder actually reads. Every one was observed in a Quick Action that
 # Automator itself wrote. Dropping any of them is the silent-failure mode.
 REQUIRED_METADATA_KEYS = {

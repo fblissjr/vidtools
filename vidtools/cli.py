@@ -1,16 +1,18 @@
 import argparse
 import sys
-import orjson
 from pathlib import Path
-from .utils import (
-    is_valid_file, check_ffmpeg_installed, VIDEO_EXTS, AUDIO_EXTS, IMAGE_EXTS,
-)
-from . import operations
-from .compress import DEFAULT_TARGET_SSIM, FIT_PROFILES, compress_image
-from . import image_ops
-from . import audio_ops
-from . import ytdlp
 
+import orjson
+
+from . import audio_ops, image_ops, operations, ytdlp
+from .compress import DEFAULT_TARGET_SSIM, FIT_PROFILES, compress_image
+from .utils import (
+    AUDIO_EXTS,
+    IMAGE_EXTS,
+    VIDEO_EXTS,
+    check_ffmpeg_installed,
+    is_valid_file,
+)
 
 # --- Input-type dispatch ---
 # VIDEO_EXTS / AUDIO_EXTS / IMAGE_EXTS live in utils.py (shared with video_ops).

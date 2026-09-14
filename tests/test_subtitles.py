@@ -7,7 +7,6 @@ Finder Quick Action on apostrophes.
 """
 
 import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -111,9 +110,10 @@ def test_missing_libass_gives_an_actionable_error(tmp_path):
     """The capability gap must name itself. Without this the user gets an
     'Error parsing filterchain' with no indication that their ffmpeg simply
     lacks libass."""
-    from vidtools.progress import FfmpegError
-    from vidtools import video_ops
     import unittest.mock as m
+
+    from vidtools import video_ops
+    from vidtools.progress import FfmpegError
     with m.patch.object(video_ops, "_ffmpeg_has_filter", lambda n: False):
         with pytest.raises(FfmpegError, match="libass"):
             video_ops.add_subtitles("in.mp4", "out.mp4", "s.srt")
@@ -123,8 +123,9 @@ def test_missing_libass_gives_an_actionable_error(tmp_path):
 def test_unprobeable_ffmpeg_does_not_blame_libass(tmp_path):
     """A failed probe (ffmpeg absent, or timed out) returns None. Treating None
     as "filter missing" would tell someone with no ffmpeg to install libass."""
-    from vidtools import video_ops
     import unittest.mock as m
+
+    from vidtools import video_ops
     with m.patch.object(video_ops, "_ffmpeg_has_filter", lambda n: None):
         with m.patch.object(video_ops, "run_ffmpeg") as run:
             video_ops.add_subtitles("in.mp4", "out.mp4", "s.srt")
@@ -134,8 +135,9 @@ def test_unprobeable_ffmpeg_does_not_blame_libass(tmp_path):
 @pytest.mark.ffmpeg
 def test_failed_probe_is_not_cached(tmp_path):
     """An lru_cache would pin a transient timeout for the process lifetime."""
-    from vidtools import utils
     import unittest.mock as m
+
+    from vidtools import utils
     utils._CAPABILITY_CACHE.clear()
     with m.patch.object(utils.subprocess, "run", side_effect=OSError("boom")):
         assert utils._ffmpeg_capabilities("filters") is None

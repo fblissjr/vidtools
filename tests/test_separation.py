@@ -3,8 +3,9 @@
 These tests mock the audio-separator backend so they run without the optional
 'separation' extra installed and without downloading any models.
 """
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from vidtools import separation
 

@@ -1,10 +1,18 @@
 """Tests for image operations."""
 import os
-from PIL import Image
+
 import pytest
+from PIL import Image
+
 from vidtools.image_ops import (
-    resize_image, convert_image, crop_image, create_thumbnail,
-    strip_image_metadata, optimize_image, adjust_image, get_image_info,
+    adjust_image,
+    convert_image,
+    create_thumbnail,
+    crop_image,
+    get_image_info,
+    optimize_image,
+    resize_image,
+    strip_image_metadata,
 )
 
 

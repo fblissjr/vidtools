@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import structlog
+
 from .progress import report_progress
 
 logger = structlog.get_logger(__name__)

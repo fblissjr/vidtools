@@ -4,8 +4,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from .utils import run_ffmpeg, logger, probe_json, require_encoder
 from .progress import report_progress
+from .utils import logger, probe_json, require_encoder, run_ffmpeg
 
 # Map output extension to ffmpeg audio codec
 AUDIO_CODEC_MAP = {

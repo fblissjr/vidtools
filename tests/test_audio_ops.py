@@ -1,10 +1,16 @@
 """Tests for audio operations."""
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
 from vidtools.audio_ops import (
-    convert_audio, cut_audio, normalize_audio,
-    fade_audio, resample_audio, clean_audio,
     AUDIO_CODEC_MAP,
+    clean_audio,
+    convert_audio,
+    cut_audio,
+    fade_audio,
+    normalize_audio,
+    resample_audio,
 )
 
 

@@ -1,10 +1,19 @@
 """Tests for input-type smart dispatch."""
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+
 from vidtools.cli import (
-    _detect_kind, _make_smart, VIDEO_EXTS, AUDIO_EXTS, IMAGE_EXTS,
-    _quality_to_crf, _quality_to_audio_bitrate, setup_argparse,
-    _audio_verb, _parse_pipeline_steps,
+    AUDIO_EXTS,
+    IMAGE_EXTS,
+    VIDEO_EXTS,
+    _audio_verb,
+    _detect_kind,
+    _make_smart,
+    _parse_pipeline_steps,
+    _quality_to_audio_bitrate,
+    _quality_to_crf,
+    setup_argparse,
 )
 
 
@@ -248,6 +257,7 @@ class TestPipelineStepFlagsMatchTopLevel:
 class TestMissingFuncDoesNotCrash:
     def test_handle_command_survives_missing_func(self):
         import argparse as _ap
+
         from vidtools.cli import handle_command
         # A namespace with a command but no func must not raise.
         handle_command(_ap.Namespace(command="bogus"))  # falls through to help

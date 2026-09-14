@@ -1,6 +1,8 @@
 """Tests for the operation pipeline."""
-import pytest
 from unittest.mock import patch
+
+import pytest
+
 from vidtools.pipeline import Pipeline, PipelineStep
 
 

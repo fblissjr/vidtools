@@ -9,8 +9,8 @@ context carried through thread-local storage.
 """
 
 import threading
+from collections.abc import Callable
 from contextlib import contextmanager
-from typing import Callable
 
 ProgressSink = Callable[[int, str], None]
 
