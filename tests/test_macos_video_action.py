@@ -27,16 +27,19 @@ pytestmark = pytest.mark.skipif(
 
 SCRIPT = Path(__file__).resolve().parents[1] / "macos" / "compress-video.sh"
 
-# Every preset, and the exact argv it must produce after the input/output pair.
-# Resolutions are caps rather than targets -- see --max-edge -- so a clip
-# already under one is passed through at its own size rather than enlarged.
+# Every preset, and the exact recipe / flag argv it must produce before the
+# input/output pair.
 PRESETS = {
-    "Smallest - 480p": ["resize", "--max-edge", "854", "convert", "--crf", "28"],
-    "Small - 720p": ["resize", "--max-edge", "1280", "convert", "--crf", "26"],
-    "Balanced - 1080p": ["resize", "--max-edge", "1920", "convert", "--crf", "24"],
-    "Original size, just compress": ["convert", "--crf", "24"],
+    "Universal <100 MB (H.264 - Sharing / Web)": ["--recipe", "universal"],
+    "Max Quality <100 MB (10-bit HEVC - Apple / Modern)": ["--recipe", "hevc"],
+    "Fast Hardware <100 MB (Apple Silicon VideoToolbox)": ["--recipe", "hw"],
+    "Visually Lossless Archival (10-bit HEVC CRF 16)": ["--recipe", "archival"],
+    "Balanced - 1080p": ["--recipe", "balanced-1080p"],
+    "Small - 720p": ["--recipe", "small-720p"],
+    "Smallest - 480p": ["--recipe", "smallest-480p"],
+    "Original size, just compress": ["--recipe", "crf"],
     "Balanced - 1080p, keep metadata":
-        ["resize", "--max-edge", "1920", "convert", "--crf", "24"],
+        ["--recipe", "balanced-1080p", "--preserve-metadata"],
 }
 
 VIDTOOLS_OK = (
@@ -122,47 +125,46 @@ def _video(tmp_path, name="clip.mp4", size=8192):
     return p
 
 
-@pytest.mark.parametrize("choice,steps", PRESETS.items(), ids=lambda v: str(v)[:26])
-def test_every_reencode_preset_maps_to_its_steps(harness, tmp_path, choice, steps):
+@pytest.mark.parametrize("choice,flags", PRESETS.items(), ids=lambda v: str(v)[:26])
+def test_every_reencode_preset_maps_to_its_recipe(harness, tmp_path, choice, flags):
     """Claim: deleting these lets a preset silently fall through to the default.
 
-    Includes 'Original size, just compress', which builds no resize step and so
-    expands an empty PRE array -- the shape that killed the image action's
-    no-flag preset under bash 3.2."""
+    Includes presets that leave EXTRA_ARGS=() empty -- the shape that killed the
+    image action's no-flag preset under bash 3.2."""
     run, argfile, _ = harness
     r = run(choice, _video(tmp_path))
     assert r.returncode == 0, r.stderr
     recorded = argfile.read_text().split()
-    assert recorded[0] == "pipeline"
-    assert recorded[-len(steps):] == steps
+    assert recorded[0] == "compress"
+    assert recorded[1:1 + len(flags)] == flags
 
 
-def test_keep_metadata_preset_passes_the_flag_before_the_input(harness, tmp_path):
-    """Claim: deleting this lets --preserve-metadata be appended after the
-    output path, where `pipeline` parses it as a step name and rejects it.
-
-    `steps` is argparse.REMAINDER, so everything after the output filename is a
-    pipeline step. The flag has only one legal position."""
+@pytest.mark.parametrize(
+    "choice,flags",
+    [(k, v) for k, v in PRESETS.items() if "keep metadata" not in k],
+    ids=lambda v: str(v)[:26],
+)
+def test_keep_metadata_checkbox_appends_preserve_metadata_to_every_preset(
+    harness, tmp_path, choice, flags
+):
+    """The AppKit NSAlert suppression checkbox appends `|KEEP_META` to the chosen
+    preset title, allowing any preset to keep metadata without duplicating menu items."""
     run, argfile, _ = harness
-    r = run("Balanced - 1080p, keep metadata", _video(tmp_path))
+    r = run(f"{choice}|KEEP_META", _video(tmp_path))
     assert r.returncode == 0, r.stderr
     argv = argfile.read_text().split()
-    assert argv[1] == "--preserve-metadata"
-    assert argv.index("--preserve-metadata") < argv.index("resize")
+    assert argv[0] == "compress"
+    assert argv[1:1 + len(flags) + 1] == [*flags, "--preserve-metadata"]
 
 
 def test_strip_only_preset_stream_copies_instead_of_re_encoding(harness, tmp_path):
-    """Claim: deleting this turns the one instant preset into a full re-encode.
-
-    Its entire value is being pixel-identical and taking seconds; running it
-    through `pipeline` would re-encode, which is both slower and lossy."""
+    """Claim: deleting this turns the one instant preset into a full re-encode."""
     run, argfile, _ = harness
     r = run("Strip metadata only - no re-encode", _video(tmp_path))
     assert r.returncode == 0, r.stderr
     argv = argfile.read_text().split()
-    assert argv[0] == "convert"
-    assert "--copy" in argv
-    assert "resize" not in argv
+    assert argv[0] == "compress"
+    assert argv[1:3] == ["--recipe", "copy"]
 
 
 def test_strip_only_keeps_the_source_container(harness, tmp_path):
@@ -507,3 +509,18 @@ def test_script_keeps_its_placeholders():
     body = SCRIPT.read_text()
     assert "@VIDTOOLS_BIN@" in body
     assert "@FFMPEG_DIR@" in body
+
+
+def test_embedded_applescript_compiles_cleanly(tmp_path):
+    """Because the test harness stubs osascript to avoid drawing modal GUI
+    windows, a syntax error in the embedded AppKit AppleScript block would pass
+    every stubbed test and fail at right-click time. `/usr/bin/osacompile`
+    verifies the AppleScript/ObjC syntax without executing `runModal()`."""
+    text = SCRIPT.read_text()
+    block = text.split("<<'APPLESCRIPT'\n", 1)[1].split("\nAPPLESCRIPT", 1)[0]
+    scpt = tmp_path / "dialog.scpt"
+    r = subprocess.run(
+        ["/usr/bin/osacompile", "-o", str(scpt), "-"],
+        input=block, capture_output=True, text=True,
+    )
+    assert r.returncode == 0, f"AppleScript syntax error: {r.stderr}"

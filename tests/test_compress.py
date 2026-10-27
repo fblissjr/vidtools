@@ -538,3 +538,26 @@ def test_explicit_output_still_overwrites(tmp_path, photo_png):
     a = compress_image(str(src), str(out)).output_path
     b = compress_image(str(src), str(out)).output_path
     assert a == b == str(out)
+
+
+@pytest.mark.pil_real
+def test_compress_image_strips_metadata_by_default(private_jpeg, tmp_path):
+    out = tmp_path / "stripped.jpg"
+    compress_image(private_jpeg, str(out), target_ssim=0.9)
+    with Image.open(out) as result:
+        exif = result.getexif()
+        assert not exif.get(0x8298), "copyright survived default strip"
+        assert not exif.get_ifd(0x8825), "GPS survived default strip"
+
+
+@pytest.mark.pil_real
+def test_compress_image_preserve_metadata_keeps_provenance_without_gps(private_jpeg, tmp_path):
+    """`macos/compress-image.sh` passes `--preserve-metadata` to `vidtools compress`."""
+    from vidtools.cli import parse_arguments
+    out = tmp_path / "kept.jpg"
+    args = parse_arguments(["compress", "--preserve-metadata", private_jpeg, str(out)])
+    args.func(args)
+    with Image.open(out) as result:
+        exif = result.getexif()
+        assert exif.get(0x8298) == "(c) Example", "copyright was dropped with --preserve-metadata"
+        assert not exif.get_ifd(0x8825), "GPS leaked even under allowlist"

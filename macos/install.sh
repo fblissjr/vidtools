@@ -16,10 +16,9 @@
 #
 # Automator rather than a SwiftUI app: a signed app is a notarisation problem
 # this project does not otherwise have, and the Run Shell Script action covers
-# the case. The cost is that AppleScript cannot draw a multi-control panel, so
-# each dialog is one preset list rather than a Format / Size / Preserve Metadata
-# trio. If that trade stops being worth it, the scripts here are what a native
-# front end would call.
+# the case. Both Quick Actions use AppleScript Objective-C (AppKit NSAlert +
+# NSPopUpButton + suppression checkbox) so the user gets a native preset
+# dropdown and a "Keep source metadata" checkbox in a single modal dialog.
 
 set -euo pipefail
 
@@ -131,9 +130,21 @@ PYTHON="$REPO_ROOT/.venv/bin/python3"
 #
 # The directory of the symlink, deliberately not its target: a Homebrew bin
 # entry survives version bumps, the Cellar path it points into does not.
+# If Homebrew's keg-only `ffmpeg-full` is installed alongside (or instead of)
+# a linked `ffmpeg`, prefer `<prefix>/opt/ffmpeg-full/bin` so `libx265`,
+# `libass`, and `libaom-av1` are available to Quick Actions.
 FFMPEG_DIR=""
 if ffmpeg_bin=$(command -v ffmpeg 2>/dev/null); then
     FFMPEG_DIR=$(cd "$(dirname "$ffmpeg_bin")" && pwd)
+    brew_prefix=$(dirname "$FFMPEG_DIR")
+    if [ -x "$brew_prefix/opt/ffmpeg-full/bin/ffmpeg" ]; then
+        FFMPEG_DIR="$brew_prefix/opt/ffmpeg-full/bin"
+    fi
+elif brew_bin=$(command -v brew 2>/dev/null); then
+    brew_prefix=$(cd "$(dirname "$brew_bin")/.." && pwd)
+    if [ -x "$brew_prefix/opt/ffmpeg-full/bin/ffmpeg" ]; then
+        FFMPEG_DIR="$brew_prefix/opt/ffmpeg-full/bin"
+    fi
 fi
 
 # Per-action state, read by the EXIT trap. Cleared after each success so a

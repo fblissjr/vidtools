@@ -115,13 +115,21 @@ vidtools adjust --rotation 45 --fill white in.png out.png   # corner fill for of
 
 (For image resize/convert/crop/rotate/info, use the universal verbs above.)
 
-#### compress — shrink an image without guessing
+#### compress — shrink an image or video
 
-`optimize` recompresses into the format you name. `compress` picks the format
-*and* the quality by measuring: it encodes candidates, scores each against the
-original with SSIM, and writes the smallest one that clears a fidelity target.
+For **images**, `optimize` recompresses into the format you name, whereas
+`compress` picks the format *and* the quality by measuring: it encodes
+candidates, scores each against the original with SSIM, and writes the smallest
+one that clears a fidelity target.
+
+For **videos**, `compress` encodes using a named recipe (`--recipe`, defaulting
+to `universal` `<100 MB` H.264 + AAC) with macOS AudioToolbox AAC (`aac_at`)
+when available and deep metadata/SEI stripping (`-map_metadata -1`,
+`-map_metadata:s -1`, `-map_chapters -1`, `+bitexact`, stream `encoder=`
+blanking, and H.264/HEVC SEI removal).
 
 ```bash
+# Images
 vidtools compress photo.jpg                          # -> photo_compressed.<winning ext>
 vidtools compress photo.jpg small                    # winner supplies the extension
 vidtools compress photo.jpg out.webp                 # or name the format yourself
@@ -131,6 +139,17 @@ vidtools compress photo.jpg --max-size 500k          # byte budget; maximises fi
 vidtools compress logo.png --lossless                # exact encodes only, smallest wins
 vidtools compress photo.jpg --allow-avif             # opt into AVIF
 vidtools compress photo.jpg --fit vision             # downscale for a vision API first
+
+# Videos
+vidtools compress clip.mov                           # -> clip_compressed.mp4 (Universal <100 MB H.264)
+vidtools compress clip.mov out.mp4 --recipe hevc     # <100 MB 10-bit HEVC (hvc1)
+vidtools compress clip.mov out.mp4 --recipe hw       # <100 MB Apple Silicon VideoToolbox HEVC
+vidtools compress clip.mov out.mp4 --recipe archival # 10-bit HEVC CRF 16 (aq-mode=3) + 320k AAC
+vidtools compress clip.mov out.mp4 --recipe balanced-1080p
+vidtools compress clip.mov out.mp4 --recipe small-720p
+vidtools compress clip.mov out.mp4 --recipe smallest-480p
+vidtools compress clip.mov out.mp4 --recipe crf
+vidtools compress clip.mov out.mp4 --recipe copy     # strip metadata & add +faststart, no re-encode
 ```
 
 `--fit` downscales to what the destination will actually keep, before
@@ -229,9 +248,9 @@ all-or-nothing at the container level, so the flag keeps everything, location
 included.
 
 Verbs that take `--preserve-metadata`: `convert`, `resize`, `crop`, `trim`,
-`rotate`, `concat`, `add-audio`, `match-duration`, `thumbnail`, `optimize`,
-`adjust`, `pipeline`, `subtitles`, `normalize`, `fade`, `resample`, `clean`,
-`extract-audio`, `extract-frames`, `slideshow`.
+`rotate`, `compress`, `concat`, `add-audio`, `match-duration`, `thumbnail`,
+`optimize`, `adjust`, `pipeline`, `subtitles`, `normalize`, `fade`, `resample`,
+`clean`, `extract-audio`, `extract-frames`, `slideshow`.
 `sanitize` and `strip-metadata` always strip — that is their job.
 
 **Audio inverts the default, on purpose.** For a photo or a clip, metadata is
@@ -264,12 +283,12 @@ bash macos/install.sh              # install both
 bash macos/install.sh --uninstall  # remove both
 ```
 
-Two entries, each offering a preset list:
+Two entries, each offering a native preset dropdown and a **Keep source metadata** checkbox:
 
 | | presets |
 |---|---|
-| **Compress Image** | *Smallest, sized for AI vision* (WebP or AVIF) / *Balanced* / *Visually lossless* / *Lossless* / *Balanced, keep metadata* |
-| **Compress Video** | *Smallest — 480p* / *Small — 720p* / *Balanced — 1080p* / *Original size, just compress* / *Strip metadata only — no re-encode* / *Balanced — 1080p, keep metadata* |
+| **Compress Image** | *Smallest — sized for AI vision (WebP)* (default) / *Smallest — sized for AI vision (AVIF)* / *Balanced (WebP)* / *Visually lossless (WebP)* / *Lossless — exact pixels* |
+| **Compress Video** | *Universal <100 MB (H.264 — Sharing / Web)* (default) / *Max Quality <100 MB (10-bit HEVC — Apple / Modern)* / *Fast Hardware <100 MB (Apple Silicon VideoToolbox)* / *Visually Lossless Archival (10-bit HEVC CRF 16)* / *Balanced — 1080p* / *Small — 720p* / *Smallest — 480p* / *Original size, just compress* / *Strip metadata only — no re-encode* |
 
 A preset list rather than one menu entry per operation — the convention macOS's
 own Convert Image follows, and it keeps the Quick Actions menu from filling up.
@@ -280,18 +299,29 @@ Two bundles rather than one accepting both types, so each entry appears only on
 files it can act on and neither script has to cope with a mixed selection —
 which has no correct preset list.
 
-**Everything strips GPS, camera and timestamp metadata except the explicit
-*keep metadata* preset.** For video that is `-map_metadata -1`, which is
-all-or-nothing at the container level: the *keep* preset keeps everything,
-location included. See [Metadata: what gets stripped](#metadata-what-gets-stripped).
+**Every preset strips identifying metadata by default**, and the dialog includes
+a single **Keep source metadata** checkbox if you want to opt into keeping it for
+any preset. For video, default stripping removes container tags, per-stream
+tags, chapters, and H.264/HEVC encoder SEI user data (`-map_metadata -1`,
+`-map_metadata:s -1`, `-map_chapters -1`, `+bitexact`, `filter_units=remove_types=6`
+/ `no-info=1`). See [Metadata: what gets stripped](#metadata-what-gets-stripped).
 
 ### Video specifics
 
-The resolutions are **caps, not targets** — a clip already smaller than the
-preset is passed through at its own size rather than enlarged. They cap the
-*longest* edge, so portrait phone video and landscape footage get the same
-treatment (`--max-edge`, below). Re-encodes always write `.mp4` with libx264 at
-a fixed CRF.
+The `<100 MB` presets (`universal`, `hevc`, `hw`) target a `95,000,000`-byte
+safety budget so files fit comfortably under standard 100 MB sharing and upload
+limits. When a clip is already smaller than the budget,
+software encoders run a fast 1-pass CRF encode capped with VBV `-maxrate` /
+`-bufsize` (and automatically fall back to 2-pass target-bitrate if the 1-pass
+output exceeds `max_size`); larger clips go straight to 2-pass target-bitrate.
+All presets use macOS's native AudioToolbox AAC encoder (`aac_at`) when
+available.
+
+The resolution presets (`balanced-1080p`, `small-720p`, `smallest-480p`) are
+**caps, not targets** — a clip already smaller than the preset is passed
+through at its own size rather than enlarged. They cap the *longest* edge, so
+portrait phone video and landscape footage get the same treatment (`--max-edge`,
+below).
 
 *Strip metadata only* is the odd one out: a stream copy, so it is effectively
 instant, pixel-identical, and keeps the source container. It is what you want
@@ -300,18 +330,13 @@ when the file is fine and only its metadata is not.
 **Nothing is ever overwritten.** Outputs follow the same rule as `compress`: a
 second pass over `clip.mp4` writes `clip_compressed-2.mp4` rather than replacing
 the first result, and two selected files whose outputs would collide (`clip.mov`
-and `clip.mp4` both want `clip_compressed.mp4`) get distinct names. Selecting a
-file together with its own earlier output is safe for the same reason.
+and `clip.mp4` both resolve to `clip_compressed.mp4`) get distinct names.
+Selecting a file together with its own earlier output is safe for the same
+reason.
 
 Encodes are written to a temp file beside the destination and moved into place
 on success, so an interrupted encode never leaves a half-written file under the
 real name.
-
-libx264 rather than VideoToolbox, measured on an M2 Ultra with ffmpeg 8.1.2
-(20s of 1080p down to 720p): x264 took 1.4s for 1.53 MB, `h264_videotoolbox`
-0.9s for 5.07 MB. Hardware encoding buys almost nothing at this scale and costs
-3x the file size, and CRF holds quality steady across content where a fixed
-bitrate cannot.
 
 ### How the bundles are built
 
@@ -333,10 +358,11 @@ silently.
 **The video action needs ffmpeg's directory baked in.** Automator runs with a
 minimal PATH containing neither `/usr/local/bin` nor Homebrew's prefix, and
 every video preset shells out to ffmpeg on every file. `install.sh` resolves it
-from your PATH at install time — so install ffmpeg *before* running it, and
-re-run the installer if you later move or change ffmpeg. With no ffmpeg found,
-the video action is skipped with a warning and the image action still installs;
-it has no ffmpeg dependency at all.
+from your PATH at install time (automatically preferring Homebrew's keg-only
+`<prefix>/opt/ffmpeg-full/bin` when installed) — so install ffmpeg *before*
+running it, and re-run the installer if you later move or change ffmpeg. With no
+ffmpeg found, the video action is skipped with a warning and the image action
+still installs; it has no ffmpeg dependency at all.
 
 The editable install is the actions' most likely failure. If the venv stops
 resolving the package — a moved repo, an interrupted `uv sync`, a missing
@@ -357,10 +383,10 @@ non-zero rather than reporting a removal that quietly took your files with it.
 Same for anything that is not a bundle directory at all. `--uninstall` on a
 machine with nothing installed says so and exits 0.
 
-Automator rather than a native app, so there is no code-signing or notarisation
-step. The trade is that AppleScript cannot draw a multi-control panel, so each
-is one preset list instead of a Format / Size / Preserve Metadata trio. If that
-becomes limiting, the shell scripts are what a native front end would call.
+Automator rather than a standalone SwiftUI app, so there is no code-signing or
+notarisation step. Both Quick Actions use AppleScript Objective-C (`AppKit`) to
+present a single native `NSAlert` with an `NSPopUpButton` preset dropdown and a
+**Keep source metadata** suppression checkbox.
 
 ### If a Quick Action doesn't appear
 

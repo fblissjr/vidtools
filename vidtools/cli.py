@@ -13,6 +13,7 @@ from .utils import (
     check_ffmpeg_installed,
     is_valid_file,
 )
+from .video_ops import VIDEO_COMPRESS_RECIPES, compress_video
 
 # --- Input-type dispatch ---
 # VIDEO_EXTS / AUDIO_EXTS / IMAGE_EXTS live in utils.py (shared with video_ops).
@@ -36,7 +37,7 @@ def _detect_kind(path: str) -> str:
 
 
 #: Verbs whose media kind is decided by the input file, not the verb.
-_SMART_COMMANDS = frozenset({"info", "convert", "resize", "crop", "trim", "cut", "rotate"})
+_SMART_COMMANDS = frozenset({"info", "convert", "resize", "crop", "trim", "cut", "rotate", "compress"})
 
 # Verbs that have a media-specific alternative when the input kind isn't supported.
 _SMART_HINTS = {
@@ -44,6 +45,7 @@ _SMART_HINTS = {
     ("crop", "audio"): "Audio can't be cropped; use 'trim' to cut by time.",
     ("trim", "image"): "Images have no duration; use 'crop' for spatial trimming.",
     ("rotate", "audio"): "Audio can't be rotated.",
+    ("compress", "audio"): "Use 'convert' with -q or --bitrate to compress audio.",
 }
 
 
@@ -777,43 +779,56 @@ Examples:
     # ---------------------------------------------------------------- compress
     compress_p = subparsers.add_parser(
         "compress",
-        help="Shrink an image, picking the format automatically",
+        help="Compress an image (SSIM search) or video (recipe / byte budget)",
         formatter_class=argparse.RawTextHelpFormatter,
-        description="""Measure candidate encodings and write the smallest one that
-meets a fidelity target.
+        description="""Compress an image or video, stripping identifying metadata by default.
 
-Unlike `optimize` (which recompresses into the format you name), `compress`
-searches formats and qualities, scores each against the original, and reports
-what it found. Defaults to PNG/JPEG/WebP -- the formats the Claude and Gemini
-vision APIs accept. AVIF usually compresses far better but no major vision API
-decodes it, so it is opt-in via --allow-avif.""",
+For images: measures candidate encodings (PNG/JPEG/WebP, or AVIF with --allow-avif)
+and writes the smallest one that meets a fidelity target (--target-ssim) or fits
+within --max-size.
+
+For videos: encodes using a named recipe (--recipe, default 'universal' <100 MB
+H.264 + AAC) with deep container/stream/SEI metadata stripping and macOS
+AudioToolbox AAC when available.""",
     )
-    compress_p.add_argument("input", type=lambda x: is_valid_file(compress_p, x), help="Input image")
+    compress_p.add_argument("input", type=lambda x: is_valid_file(compress_p, x),
+                            help="Input image or video")
     compress_p.add_argument("output", nargs="?",
-                          help="Output path. Omit the extension to let the winning format "
-                               "supply one; omit entirely for <input>_compressed.<ext>")
+                            help="Output path. Omit for <input>_compressed.<ext>")
     compress_p.add_argument("--target-ssim", type=float, default=DEFAULT_TARGET_SSIM,
-                          help=f"Fidelity target 0-1 (default: {DEFAULT_TARGET_SSIM})")
+                            help=f"Fidelity target 0-1 for images (default: {DEFAULT_TARGET_SSIM})")
     compress_p.add_argument("--lossless", action="store_true",
-                          help="Only exact encodes (SSIM 1.0); smallest wins")
+                            help="Only exact encodes (SSIM 1.0, images); smallest wins")
     compress_p.add_argument("--max-size", type=_parse_size,
-                          help="Byte budget (e.g. 500k, 2M). Maximises fidelity within it")
+                            help="Byte budget (e.g. 500k, 2M, 100M) for image or video")
     compress_p.add_argument("--allow-avif", action="store_true",
-                          help="Allow AVIF. Compresses best, but Claude/Gemini cannot read it")
+                            help="Allow AVIF for images. Compresses best, but Claude/Gemini cannot read it")
     compress_p.add_argument("--fit", choices=sorted(FIT_PROFILES),
-                            help="Downscale for a destination with a resolution ceiling "
+                            help="Downscale images for a destination with a resolution ceiling "
                                  "before compressing. 'vision' targets Claude's high-resolution "
                                  "tier (Opus 4.8/4.7, Sonnet 5); 'vision-standard' targets Haiku "
                                  "and older. Never upscales.")
     compress_p.add_argument("--dry-run", action="store_true",
-                          help="Report the ranked candidates without writing a file")
+                            help="Report the ranked image candidates without writing a file")
+    compress_p.add_argument("--recipe", choices=list(VIDEO_COMPRESS_RECIPES), default="universal",
+                            help="Video compression recipe (default: universal)")
+    compress_p.add_argument("--max-edge", dest="max_edge", type=int, metavar="N",
+                            help="Cap the longest video edge at N pixels (never enlarges)")
+    compress_p.add_argument("--crf", type=int,
+                            help="Video CRF override (0-51)")
+    compress_p.add_argument(
+        "--preset",
+        choices=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"],
+        help="Video x264/x265 encoding preset override",
+    )
+    _add_preserve_metadata(compress_p)
 
-    def _compress(args):
+    def _compress_image(args):
         report = compress_image(
             args.input, args.output,
             target_ssim=args.target_ssim, lossless=args.lossless,
             max_size=args.max_size, allow_avif=args.allow_avif, fit=args.fit,
-            dry_run=args.dry_run,
+            dry_run=args.dry_run, preserve_metadata=args.preserve_metadata,
         )
         src_mb = report.source_size / 1048576
         dims = f"{report.width}x{report.height}"
@@ -828,7 +843,17 @@ decodes it, so it is opt-in via --allow-avif.""",
             print(f"wrote {report.output_path}")
         elif args.dry_run:
             print("(dry run -- nothing written)")
-    compress_p.set_defaults(func=_compress)
+
+    def _compress_video(args):
+        out = compress_video(
+            args.input, args.output,
+            recipe=args.recipe, max_size=args.max_size,
+            max_edge=args.max_edge, crf=args.crf,
+            preset=args.preset, preserve_metadata=args.preserve_metadata,
+        )
+        print(f"wrote {out}")
+
+    compress_p.set_defaults(func=_make_smart("compress", video=_compress_video, image=_compress_image))
 
     # ---------------------------------------------------------------- adjust
     adjust = subparsers.add_parser("adjust", help="Adjust image brightness/contrast/rotation/flip",
@@ -1035,7 +1060,7 @@ def handle_command(args: argparse.Namespace) -> None:
 #: needless barrier, and it also forced the image tests behind an ffmpeg gate,
 #: which is how a family of image-metadata defects went unnoticed.
 _PIL_ONLY_COMMANDS = frozenset({
-    "compress", "optimize", "thumbnail", "strip-metadata", "adjust",
+    "optimize", "thumbnail", "strip-metadata", "adjust",
 })
 
 

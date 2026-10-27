@@ -19,6 +19,7 @@ import pytest
 
 from vidtools.audio_ops import cut_audio, normalize_audio
 from vidtools.operations import (
+    compress_video,
     convert_format,
     cut_video,
     extract_audio,
@@ -420,3 +421,55 @@ def test_normalize_two_pass_parses_real_ffmpeg_output(tmp_path):
     assert m, "ffmpeg's summary format changed; normalize_audio's parse is now dead"
     assert -20.0 < float(m.group(1)) < -12.0, (
         f"normalized to {m.group(1)} LUFS, expected near -16")
+
+
+class TestCompressVideoReal:
+    """Real-ffmpeg integration tests for `compress_video` and `vidtools compress`."""
+
+    @pytest.fixture(scope="class")
+    @staticmethod
+    def tagged_clip(tmp_path_factory):
+        d = tmp_path_factory.mktemp("tagged_compress")
+        src = str(d / "src.mp4")
+        _run(["ffmpeg", "-v", "error", "-f", "lavfi",
+              "-i", "testsrc=duration=1:size=160x120:rate=10",
+              "-metadata", "location=+37.7749-122.4194/",
+              "-metadata", "comment=secret prompt",
+              "-c:v", "libx264", "-y", src])
+        return src
+
+    def _tag(self, path, key):
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", f"format_tags={key}",
+             "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True).stdout.strip()
+        return out or None
+
+    def test_universal_strips_metadata_and_x264_sei_by_default(self, tagged_clip, tmp_path):
+        assert self._tag(tagged_clip, "location") == "+37.7749-122.4194/"
+        assert b"x264 - core" in open(tagged_clip, "rb").read()
+
+        out = str(tmp_path / "universal.mp4")
+        compress_video(tagged_clip, out, recipe="universal", preset="ultrafast")
+        assert os.path.getsize(out) > 0
+        assert self._tag(out, "location") is None, "GPS tag survived universal compress"
+        assert self._tag(out, "comment") is None, "comment tag survived universal compress"
+        raw_bytes = open(out, "rb").read()
+        assert b"x264 - core" not in raw_bytes, "x264 SEI NAL unit survived filter_units=remove_types=6"
+
+    def test_universal_preserve_metadata_keeps_location(self, tagged_clip, tmp_path):
+        out = str(tmp_path / "kept.mp4")
+        compress_video(tagged_clip, out, recipe="universal", preset="ultrafast", preserve_metadata=True)
+        assert self._tag(out, "location") == "+37.7749-122.4194/", "preserve_metadata=True dropped GPS tag"
+        assert self._tag(out, "comment") == "secret prompt", "preserve_metadata=True dropped comment tag"
+        assert b"x264 - core" in open(out, "rb").read()
+
+    def test_cli_compress_dispatches_video(self, media, tmp_path):
+        from vidtools.cli import parse_arguments
+        out = str(tmp_path / "cli_out.mp4")
+        args = parse_arguments([
+            "compress", "--recipe", "small-720p", "--preset", "ultrafast",
+            media["clip"], out,
+        ])
+        args.func(args)
+        assert os.path.exists(out) and os.path.getsize(out) > 0

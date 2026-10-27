@@ -11,11 +11,13 @@ from PIL import Image, ImageOps
 
 from .audio_ops import AUDIO_CODEC_MAP, _auto_codec
 from .audio_ops import _add_metadata_policy as _add_audio_metadata_policy
+from .compress import _unique_path
 from .image_ops import _open_image, convert_image
 from .progress import FfmpegError
 from .utils import (
     AUDIO_EXTS,
     VIDEO_EXTS,
+    _ffmpeg_has_encoder,
     _ffmpeg_has_filter,
     logger,
     probe_json,
@@ -35,6 +37,13 @@ def _get_video_encoder(codec: str = DEFAULT_VIDEO_CODEC, hwaccel: bool = False) 
         hw_map = {"libx264": "h264_videotoolbox", "libx265": "hevc_videotoolbox"}
         return hw_map.get(codec, codec)
     return codec
+
+
+def _preferred_aac_encoder() -> str:
+    """Return macOS AudioToolbox AAC ('aac_at') when available, else 'aac'."""
+    if platform.system() == "Darwin" and _ffmpeg_has_encoder("aac_at") is True:
+        return "aac_at"
+    return DEFAULT_AUDIO_CODEC
 
 
 # --- Helpers ---
@@ -151,12 +160,17 @@ def _add_metadata_policy(command: list, preserve_metadata: bool = False) -> None
     files, a 109 KB comment tag containing an entire generation prompt.
     """
     if not preserve_metadata:
-        # Both levels. In testing `-map_metadata -1` alone already cleared the
-        # per-stream tags on a stream copy, but the documented scope of the bare
-        # form is global metadata only, and `sanitize_video` has always passed
-        # both. On a privacy default, match the stricter form rather than rely
-        # on behaviour that is not promised.
-        command.extend(["-map_metadata", "-1", "-map_metadata:s", "-1"])
+        # Strip global container tags, per-stream tags, and chapters, and enable
+        # bitexact muxer/stream flags so ffmpeg does not embed Lavf/Lavc version
+        # strings into container or elementary-stream headers.
+        command.extend([
+            "-map_metadata", "-1",
+            "-map_metadata:s", "-1",
+            "-map_chapters", "-1",
+            "-fflags", "+bitexact",
+            "-flags:v", "+bitexact",
+            "-flags:a", "+bitexact",
+        ])
 
 
 def cut_video(input_file, output_file, start_time=None, end_time=None, duration=None,
@@ -732,3 +746,359 @@ def create_srt_from_transcript(input_file: str, output_file: str):
                 subtitle_index += 1
 
     logger.info(f"Converted {subtitle_index - 1} subtitle entries", file=output_file)
+
+
+# --- Video Compression Recipes ---
+
+DEFAULT_MAX_VIDEO_BYTES = 100_000_000  # 100 MB ceiling (Sharing / Web)
+
+_VIDEO_RECIPE_SPECS: dict[str, dict] = {
+    "universal": {
+        "codec": "libx264",
+        "pix_fmt": "yuv420p",
+        "crf": 23,
+        "preset": "slow",
+        "audio_bitrate": "192k",
+        "max_size": DEFAULT_MAX_VIDEO_BYTES,
+        "max_edge": None,
+    },
+    "hevc": {
+        "codec": "libx265",
+        "pix_fmt": "yuv420p10le",
+        "crf": 22,
+        "preset": "slow",
+        "audio_bitrate": "192k",
+        "max_size": DEFAULT_MAX_VIDEO_BYTES,
+        "max_edge": None,
+    },
+    "hw": {
+        "codec": "hevc_videotoolbox",
+        "pix_fmt": None,
+        "crf": None,
+        "preset": None,
+        "audio_bitrate": "192k",
+        "max_size": DEFAULT_MAX_VIDEO_BYTES,
+        "max_edge": None,
+    },
+    "archival": {
+        "codec": "libx265",
+        "pix_fmt": "yuv420p10le",
+        "crf": 16,
+        "preset": "slow",
+        "audio_bitrate": "320k",
+        "max_size": None,
+        "max_edge": None,
+        "aq_mode": 3,
+    },
+    "balanced-1080p": {
+        "codec": "libx264",
+        "pix_fmt": "yuv420p",
+        "crf": 23,
+        "preset": "slow",
+        "audio_bitrate": "192k",
+        "max_size": None,
+        "max_edge": 1920,
+    },
+    "small-720p": {
+        "codec": "libx264",
+        "pix_fmt": "yuv420p",
+        "crf": 25,
+        "preset": "slow",
+        "audio_bitrate": "192k",
+        "max_size": None,
+        "max_edge": 1280,
+    },
+    "smallest-480p": {
+        "codec": "libx264",
+        "pix_fmt": "yuv420p",
+        "crf": 28,
+        "preset": "slow",
+        "audio_bitrate": "128k",
+        "max_size": None,
+        "max_edge": 854,
+    },
+    "crf": {
+        "codec": "libx264",
+        "pix_fmt": "yuv420p",
+        "crf": 23,
+        "preset": "slow",
+        "audio_bitrate": "192k",
+        "max_size": None,
+        "max_edge": None,
+    },
+    "copy": {
+        "codec": "copy",
+        "pix_fmt": None,
+        "crf": None,
+        "preset": None,
+        "audio_bitrate": None,
+        "max_size": None,
+        "max_edge": None,
+    },
+}
+
+VIDEO_COMPRESS_RECIPES: tuple[str, ...] = tuple(_VIDEO_RECIPE_SPECS.keys())
+
+
+def _add_deep_strip_args(command: list[str], video_encoder: str, preserve_metadata: bool) -> None:
+    """Apply container + stream metadata stripping and H.264 SEI removal."""
+    _add_metadata_policy(command, preserve_metadata)
+    if not preserve_metadata:
+        if video_encoder == "libx264":
+            command.extend(["-bsf:v", "filter_units=remove_types=6"])
+        command.extend([
+            "-metadata:s:v:0", "encoder=",
+            "-metadata:s:a:0", "encoder=",
+        ])
+
+
+def _probe_budget_metrics(input_file: str) -> tuple[float | None, int | None]:
+    """Return (duration_seconds, source_size_bytes) via ffprobe for budget recipes."""
+    info = get_video_info(input_file)
+    format_info = info.get("format", {})
+    streams = info.get("streams", [])
+    video = next((s for s in streams if s.get("codec_type") == "video"), {})
+    duration = _stream_duration(video, format_info)
+    size_raw = format_info.get("size")
+    source_size: int | None = None
+    if size_raw not in (None, "N/A", ""):
+        try:
+            source_size = int(size_raw)
+        except (TypeError, ValueError):
+            source_size = None
+    if source_size is None and os.path.exists(input_file):
+        source_size = os.path.getsize(input_file)
+    return duration, source_size
+
+
+def compress_video(
+    input_file: str,
+    output_file: str | None = None,
+    *,
+    recipe: str = "universal",
+    max_size: int | None = None,
+    max_edge: int | None = None,
+    crf: int | None = None,
+    preset: str | None = None,
+    preserve_metadata: bool = False,
+) -> str:
+    """Compress a video using a named recipe or size/resolution constraints.
+
+    Recipes:
+      - 'universal': <100 MB H.264 (yuv420p) + AAC, compatible everywhere
+      - 'hevc': <100 MB 10-bit HEVC (yuv420p10le, hvc1) + AAC, higher fidelity
+      - 'hw': <100 MB Apple Silicon VideoToolbox HEVC (hvc1) + AAC, fast hardware
+      - 'archival': 10-bit HEVC CRF 16 with aq-mode=3 + 320k AAC, visually lossless
+      - 'balanced-1080p': longest edge capped at 1920px, H.264 CRF 23
+      - 'small-720p': longest edge capped at 1280px, H.264 CRF 25
+      - 'smallest-480p': longest edge capped at 854px, H.264 CRF 28, 128k AAC
+      - 'crf': original resolution, H.264 CRF 23
+      - 'copy': stream-copy video and audio, stripping metadata and adding +faststart
+
+    For budget-constrained recipes ('universal', 'hevc', 'hw', or any recipe with
+    an explicit `max_size`), short clips whose source size is already within the
+    safety budget use 1-pass CRF (with VBV maxrate ceiling) so a 10-second clip is
+    not inflated to 95 MB. Longer/larger clips use 2-pass target-bitrate encoding
+    (or hardware ABR for 'hw') to fit reliably under `max_size`.
+    """
+    if recipe not in _VIDEO_RECIPE_SPECS:
+        raise ValueError(
+            f"Unknown video compression recipe '{recipe}'. "
+            f"Available: {', '.join(VIDEO_COMPRESS_RECIPES)}."
+        )
+    if max_size is not None and max_size <= 0:
+        raise ValueError(f"max_size must be positive, got {max_size}")
+    if max_edge is not None and max_edge < 1:
+        raise ValueError(f"max_edge must be a positive pixel count, got {max_edge}")
+
+    spec = _VIDEO_RECIPE_SPECS[recipe]
+    if output_file is None:
+        base = os.path.splitext(input_file)[0]
+        output_file = _unique_path(f"{base}_compressed.mp4")
+
+    if recipe == "copy":
+        if max_edge is not None:
+            raise ValueError("Cannot resize (max_edge) when recipe='copy'.")
+        command = [
+            "ffmpeg", "-y", "-i", input_file,
+            "-map", "0:v:0", "-map", "0:a:0?",
+            "-c", "copy",
+        ]
+        _add_deep_strip_args(command, "copy", preserve_metadata)
+        _add_faststart_if_mp4(command, output_file)
+        command.append(output_file)
+        run_ffmpeg(command)
+        return output_file
+
+    effective_max_edge = max_edge if max_edge is not None else spec["max_edge"]
+    effective_max_size = max_size if max_size is not None else spec["max_size"]
+    effective_crf = crf if crf is not None else spec["crf"]
+    effective_preset = preset if preset is not None else spec["preset"]
+    audio_bitrate = spec["audio_bitrate"]
+    audio_enc = _preferred_aac_encoder()
+
+    vf_args: list[str] = []
+    if effective_max_edge is not None:
+        vf_args = ["-vf", _build_scale_filter(max_edge=effective_max_edge)]
+
+    codec = spec["codec"]
+    if codec == "hevc_videotoolbox" and (
+        platform.system() != "Darwin" or _ffmpeg_has_encoder("hevc_videotoolbox") is False
+    ):
+        codec = "libx265"
+    require_encoder(codec)
+
+    pix_fmt = spec["pix_fmt"]
+    pix_args = ["-pix_fmt", pix_fmt] if pix_fmt else []
+    tag_args = ["-tag:v", "hvc1"] if codec in ("libx265", "hevc_videotoolbox") else []
+
+    duration: float | None = None
+    source_size: int | None = None
+    target_v_kbps: int | None = None
+    needs_budget_encode = False
+
+    if effective_max_size is not None:
+        duration, source_size = _probe_budget_metrics(input_file)
+        safety_factor = 0.90 if codec == "hevc_videotoolbox" else 0.95
+        budget_bytes = int(effective_max_size * safety_factor)
+        audio_kbps = int(audio_bitrate.rstrip("k"))
+        if duration is not None and duration > 0:
+            budget_kbits = (budget_bytes * 8) / 1000.0
+            target_v_kbps = max(100, int(budget_kbits / duration) - audio_kbps)
+            if source_size is not None and source_size > budget_bytes:
+                needs_budget_encode = True
+
+    def _x265_params_arg(extra: list[str] | None = None) -> list[str]:
+        if codec != "libx265":
+            return []
+        params: list[str] = []
+        if spec.get("aq_mode") is not None:
+            params.append(f"aq-mode={spec['aq_mode']}")
+        if not preserve_metadata:
+            params.append("no-info=1")
+        if extra:
+            params.extend(extra)
+        return ["-x265-params", ":".join(params)] if params else []
+
+    def _run_one_pass() -> None:
+        cmd = [
+            "ffmpeg", "-y", "-i", input_file,
+            *vf_args,
+            "-map", "0:v:0", "-map", "0:a:0?",
+            "-c:v", codec,
+        ]
+        if effective_preset and codec in ("libx264", "libx265"):
+            cmd.extend(["-preset", effective_preset])
+        if codec == "hevc_videotoolbox":
+            hw_q = effective_crf if effective_crf is not None else 60
+            cmd.extend(["-q:v", str(hw_q)])
+        elif effective_crf is not None:
+            cmd.extend(["-crf", str(effective_crf)])
+        cmd.extend(pix_args)
+        cmd.extend(tag_args)
+        if target_v_kbps is not None and codec in ("libx264", "libx265"):
+            cmd.extend(["-maxrate", f"{target_v_kbps}k", "-bufsize", f"{target_v_kbps * 2}k"])
+        cmd.extend(_x265_params_arg())
+        cmd.extend(["-c:a", audio_enc, "-b:a", audio_bitrate])
+        _add_deep_strip_args(cmd, codec, preserve_metadata)
+        _add_faststart_if_mp4(cmd, output_file)
+        cmd.append(output_file)
+        run_ffmpeg(cmd)
+
+    def _run_budget_encode() -> None:
+        assert target_v_kbps is not None
+        if codec == "hevc_videotoolbox":
+            cmd = [
+                "ffmpeg", "-y", "-i", input_file,
+                *vf_args,
+                "-map", "0:v:0", "-map", "0:a:0?",
+                "-c:v", codec,
+                "-b:v", f"{target_v_kbps}k",
+                "-maxrate", f"{int(target_v_kbps * 1.2)}k",
+                "-bufsize", f"{target_v_kbps * 2}k",
+                *tag_args,
+                "-c:a", audio_enc, "-b:a", audio_bitrate,
+            ]
+            _add_deep_strip_args(cmd, codec, preserve_metadata)
+            _add_faststart_if_mp4(cmd, output_file)
+            cmd.append(output_file)
+            run_ffmpeg(cmd)
+            return
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            if codec == "libx265":
+                stats_file = os.path.join(tmpdir, "x265_2pass.log").replace("\\", "/")
+                pass1_extra = [f"pass=1", f"stats={stats_file}"]
+                pass2_extra = [f"pass=2", f"stats={stats_file}"]
+                pass1 = [
+                    "ffmpeg", "-y", "-i", input_file,
+                    *vf_args,
+                    "-map", "0:v:0",
+                    "-c:v", codec,
+                    *(["-preset", effective_preset] if effective_preset else []),
+                    "-b:v", f"{target_v_kbps}k",
+                    *pix_args,
+                    *tag_args,
+                    *_x265_params_arg(pass1_extra),
+                    "-an", "-f", "null", os.devnull,
+                ]
+                pass2 = [
+                    "ffmpeg", "-y", "-i", input_file,
+                    *vf_args,
+                    "-map", "0:v:0", "-map", "0:a:0?",
+                    "-c:v", codec,
+                    *(["-preset", effective_preset] if effective_preset else []),
+                    "-b:v", f"{target_v_kbps}k",
+                    *pix_args,
+                    *tag_args,
+                    *_x265_params_arg(pass2_extra),
+                    "-c:a", audio_enc, "-b:a", audio_bitrate,
+                ]
+            else:
+                passlogfile = os.path.join(tmpdir, "ffmpeg2pass")
+                pass1 = [
+                    "ffmpeg", "-y", "-i", input_file,
+                    *vf_args,
+                    "-map", "0:v:0",
+                    "-c:v", codec,
+                    *(["-preset", effective_preset] if effective_preset else []),
+                    "-b:v", f"{target_v_kbps}k",
+                    *pix_args,
+                    "-pass", "1", "-passlogfile", passlogfile,
+                    "-an", "-f", "null", os.devnull,
+                ]
+                pass2 = [
+                    "ffmpeg", "-y", "-i", input_file,
+                    *vf_args,
+                    "-map", "0:v:0", "-map", "0:a:0?",
+                    "-c:v", codec,
+                    *(["-preset", effective_preset] if effective_preset else []),
+                    "-b:v", f"{target_v_kbps}k",
+                    *pix_args,
+                    "-pass", "2", "-passlogfile", passlogfile,
+                    "-c:a", audio_enc, "-b:a", audio_bitrate,
+                ]
+            _add_deep_strip_args(pass2, codec, preserve_metadata)
+            _add_faststart_if_mp4(pass2, output_file)
+            pass2.append(output_file)
+            run_ffmpeg(pass1)
+            run_ffmpeg(pass2)
+
+    if needs_budget_encode:
+        _run_budget_encode()
+    else:
+        _run_one_pass()
+        if (
+            effective_max_size is not None
+            and target_v_kbps is not None
+            and os.path.exists(output_file)
+            and os.path.getsize(output_file) > effective_max_size
+        ):
+            logger.info(
+                "1-pass output exceeded max_size; re-encoding with target bitrate",
+                size=os.path.getsize(output_file),
+                max_size=effective_max_size,
+            )
+            _run_budget_encode()
+
+    return output_file

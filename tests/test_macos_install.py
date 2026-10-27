@@ -688,3 +688,30 @@ def test_uninstall_removes_the_bundle(services):
                        capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr
     assert not bundle.exists()
+
+
+def test_prefers_keg_only_ffmpeg_full_when_present(fake_repo, services, tmp_path):
+    """Homebrew's `ffmpeg-full` is keg-only, living at `<prefix>/opt/ffmpeg-full/bin`
+    while `<prefix>/bin/ffmpeg` may point to the slim formula (which lacks
+    libx265 and libass). The installer should bake the `ffmpeg-full` bin dir
+    into the video Quick Action when present."""
+    prefix = tmp_path / "hb"
+    slim_bin = prefix / "bin"
+    full_bin = prefix / "opt" / "ffmpeg-full" / "bin"
+    slim_bin.mkdir(parents=True)
+    full_bin.mkdir(parents=True)
+    for d in (slim_bin, full_bin):
+        ff = d / "ffmpeg"
+        ff.write_text("#!/bin/sh\nexit 0\n")
+        ff.chmod(0o755)
+
+    r = _install_from(
+        fake_repo, services,
+        extra_env={"PATH": f"{slim_bin}:/usr/bin:/bin"},
+    )
+    assert r.returncode == 0, r.stderr
+    wf = plistlib.loads(
+        (services / f"{VIDEO_NAME}.workflow" / "Contents" / "document.wflow").read_bytes()
+    )
+    script = wf["actions"][0]["action"]["ActionParameters"]["COMMAND_STRING"]
+    assert f'FFMPEG_DIR="{full_bin}"' in script

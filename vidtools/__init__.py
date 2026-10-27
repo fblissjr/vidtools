@@ -35,8 +35,10 @@ from .image_ops import (
     strip_image_metadata,
 )
 from .video_ops import (
+    VIDEO_COMPRESS_RECIPES,
     add_audio,
     add_subtitles,
+    compress_video,
     concatenate_videos,
     convert_format,
     create_slideshow,
@@ -60,7 +62,7 @@ __all__ = [
     "extract_frames", "screenshot", "concatenate_videos", "crop_video", "rotate_video",
     "add_subtitles", "get_video_info", "sanitize_video",
     "create_slideshow", "add_audio", "create_srt_from_transcript",
-    "trim_to_audio",
+    "trim_to_audio", "compress_video", "VIDEO_COMPRESS_RECIPES",
     # Image
     "resize_image", "convert_image", "crop_image", "create_thumbnail",
     "strip_image_metadata", "optimize_image", "adjust_image", "get_image_info",

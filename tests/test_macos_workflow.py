@@ -43,7 +43,9 @@ def test_metadata_carries_every_key_finder_reads():
 
 def test_presentation_mode_is_quick_action():
     """15 is a Quick Action. 512 loads without complaint and never shows up."""
-    assert make_workflow.build_workflow("echo hi")["workflowMetaData"]["presentationMode"] == 15
+    doc = make_workflow.build_workflow("echo hi")
+    assert doc["workflowMetaData"]["presentationMode"] == 15
+    assert doc["AMApplicationBuild"] == "541"
 
 
 def test_service_and_plain_type_identifiers_agree():

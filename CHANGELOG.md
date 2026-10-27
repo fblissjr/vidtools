@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.31.0
+
+### Added
+- **Unified `vidtools compress` for video and images.** `compress` is now a smart-dispatched command (`_SMART_COMMANDS`) that routes image inputs to `compress_image` and video inputs to the new `compress_video` operation (`--recipe`, `--max-size`, `--max-edge`, `--crf`, `--preset`, `--preserve-metadata`).
+- **Nine video compression recipes in `compress_video` and the macOS `Compress Video` Quick Action**, modeled on `recipes/ffmpeg_compression_recipes.md`:
+  - `universal` (*Universal <100 MB (H.264 — Sharing / Web)*, default): `libx264` + `aac_at` (`192k`), `<100 MB` budget (`95,000,000` bytes safety target), `-bsf:v filter_units=remove_types=6`.
+  - `hevc` (*Max Quality <100 MB (10-bit HEVC — Apple / Modern)*): `libx265` 10-bit (`yuv420p10le`, `-tag:v hvc1`, `no-info=1`) + `aac_at` (`192k`), `<100 MB` budget.
+  - `hw` (*Fast Hardware <100 MB (Apple Silicon VideoToolbox)*): `hevc_videotoolbox` (`-tag:v hvc1`) + `aac_at` (`192k`), `<100 MB` budget with extra 1-pass ABR safety margin.
+  - `archival` (*Visually Lossless Archival (10-bit HEVC CRF 16)*): `libx265` CRF 16 (`preset slow`, `yuv420p10le`, `-tag:v hvc1`, `no-info=1:aq-mode=3`) + `aac_at` (`320k`).
+  - `balanced-1080p`, `small-720p`, `smallest-480p`, `crf`, and `copy` (*Strip metadata only — no re-encode*).
+- **Smart `<100 MB` budget mode.** When a source video is already under the safety budget, software encoders run a single-pass CRF encode capped with VBV `-maxrate` / `-bufsize` (and automatically fall back to 2-pass target-bitrate if the 1-pass result exceeds `max_size`); larger inputs go straight to 2-pass target-bitrate in an isolated temporary `-passlogfile` directory.
+- **Deep video metadata & bitstream SEI stripping by default.** `_add_metadata_policy` now emits `-map_metadata -1 -map_metadata:s -1 -map_chapters -1 -fflags +bitexact -flags:v +bitexact -flags:a +bitexact`, and `compress_video` additionally blanks stream `encoder` tags and removes `libx264` SEI user data (`filter_units=remove_types=6`) and `libx265` info SEI (`no-info=1`).
+- **Native AppKit Quick Action dialogs on macOS 27.2.** Both `Compress Image` and `Compress Video` now present a single native `NSAlert` with an `NSPopUpButton` preset dropdown and a **Keep source metadata** suppression checkbox (`<preset>|KEEP_META`), replacing the separate `keep metadata` duplicate preset items while keeping legacy labels working in the `case` statement.
+- **Automatic `ffmpeg-full` detection in `macos/install.sh` and `AMApplicationBuild` 541.** `install.sh` prefers Homebrew's keg-only `<prefix>/opt/ffmpeg-full/bin` when installed alongside or instead of a linked `ffmpeg`, and `make_workflow.py` updates `AMApplicationBuild` to `"541"` (macOS 27.2 Automator 2.10).
+
+### Fixed
+- **`vidtools compress --preserve-metadata` now works on images as well as videos.** `compress_image` previously opened via `_open_image` (which captured `raw_exif`) but never passed `image_ops._build_exif` into candidate encodes and did not expose `--preserve-metadata` on the `compress` CLI parser.
+
+### Changed
+- Added `AGENTS.md` with the repository's agent guidance and updated `CLAUDE.md` to reference `@AGENTS.md`.
+
 ## 0.30.1
 
 ### Fixed

@@ -22,11 +22,14 @@
 #   impossible to measure -- the bug the image action shipped and then fixed by
 #   parsing stdout instead.
 #
-# libx264 with CRF rather than VideoToolbox. Measured on an M2 Ultra with
-# ffmpeg 8.1.2, 20s of 1080p down to 720p: x264 took 1.4s for 1.53 MB,
-# h264_videotoolbox 0.9s for 5.07 MB. Hardware encoding buys almost nothing at
-# this scale and costs 3x the file size, and CRF holds quality steady across
-# content where a fixed bitrate cannot.
+# * Delegates to `vidtools compress --recipe "$RECIPE"` so the CLI and Finder
+#   Quick Action share the exact same compression recipes: `<100 MB` budget
+#   presets (`universal` H.264, `hevc` 10-bit H.265, `hw` Apple Silicon
+#   VideoToolbox), visually lossless 10-bit HEVC archival (`archival`),
+#   resolution caps (`balanced-1080p`, `small-720p`, `smallest-480p`),
+#   un-resized CRF (`crf`), and lossless metadata strip (`copy`), all using
+#   macOS AudioToolbox AAC (`aac_at`) when available and deep metadata/SEI
+#   stripping by default.
 
 set -uo pipefail
 
@@ -78,61 +81,102 @@ command -v ffmpeg >/dev/null 2>&1 || fail \
 
 [ "$#" -gt 0 ] || exit 0
 
-# Preset labels are outcome-shaped ("Smallest", "Balanced") rather than
-# flag-shaped, because the person right-clicking a file is choosing a result.
-# The resolutions are caps, not targets: a clip already smaller than the preset
-# is never enlarged (see --max-edge).
+# Preset labels are outcome-shaped ("Universal <100 MB", "Balanced - 1080p")
+# rather than flag-shaped, because the person right-clicking a file is choosing
+# a result. Metadata (container tags, stream tags, chapters, encoder SEI) is
+# stripped by default across all presets; the native AppKit alert provides a
+# single "Keep source metadata" checkbox override alongside the preset dropdown.
 CHOICE=$("$OSASCRIPT" <<'APPLESCRIPT'
+use framework "Foundation"
+use framework "AppKit"
+
 set options to {¬
-    "Smallest - 480p", ¬
-    "Small - 720p", ¬
+    "Universal <100 MB (H.264 - Sharing / Web)", ¬
+    "Max Quality <100 MB (10-bit HEVC - Apple / Modern)", ¬
+    "Fast Hardware <100 MB (Apple Silicon VideoToolbox)", ¬
+    "Visually Lossless Archival (10-bit HEVC CRF 16)", ¬
     "Balanced - 1080p", ¬
+    "Small - 720p", ¬
+    "Smallest - 480p", ¬
     "Original size, just compress", ¬
-    "Strip metadata only - no re-encode", ¬
-    "Balanced - 1080p, keep metadata"}
-set picked to choose from list options ¬
-    with title "Compress Video" ¬
-    with prompt "How should these be compressed?" ¬
-    default items {"Small - 720p"}
-if picked is false then return "CANCELLED"
-return item 1 of picked
+    "Strip metadata only - no re-encode"}
+
+current application's NSApplication's sharedApplication()'s activateIgnoringOtherApps:true
+
+set alert to current application's NSAlert's alloc()'s init()
+alert's setMessageText:"Compress Video"
+alert's setInformativeText:"How should these be compressed? (Metadata is stripped by default.)"
+alert's addButtonWithTitle:"Compress"
+alert's addButtonWithTitle:"Cancel"
+alert's setShowsSuppressionButton:true
+alert's suppressionButton()'s setTitle:"Keep source metadata"
+alert's suppressionButton()'s setState:(current application's NSControlStateValueOff)
+
+set popup to current application's NSPopUpButton's alloc()'s initWithFrame:{{0, 0}, {380, 26}} pullsDown:false
+popup's addItemsWithTitles:options
+popup's selectItemWithTitle:"Universal <100 MB (H.264 - Sharing / Web)"
+alert's setAccessoryView:popup
+
+set btn to alert's runModal()
+if btn is not (current application's NSAlertFirstButtonReturn) then return "CANCELLED"
+set picked to (popup's titleOfSelectedItem()) as text
+set keepMeta to (alert's suppressionButton()'s state()) as integer
+if keepMeta is 1 then return picked & "|KEEP_META"
+return picked
 APPLESCRIPT
 )
+
+KEEP_METADATA=0
+case "$CHOICE" in
+    *"|KEEP_META")
+        KEEP_METADATA=1
+        CHOICE="${CHOICE%|KEEP_META}"
+        ;;
+esac
 
 if [ "$CHOICE" = "CANCELLED" ] || [ -z "$CHOICE" ]; then
     exit 0
 fi
 
-# MODE decides both the command shape and the output naming. PRE holds flags
-# that must precede the input path: `pipeline` takes its steps as
-# argparse.REMAINDER, so anything after the output filename is parsed as a step.
-MODE=pipeline
-PRE=()
-STEPS=()
+# RECIPE decides both the compression strategy and the output naming.
+RECIPE=""
+EXTRA_ARGS=()
 SUFFIX=_compressed
 case "$CHOICE" in
-    "Smallest - 480p")
-        STEPS=(resize --max-edge 854 convert --crf 28) ;;
-    "Small - 720p")
-        STEPS=(resize --max-edge 1280 convert --crf 26) ;;
+    "Universal <100 MB (H.264 - Sharing / Web)")
+        RECIPE=universal ;;
+    "Max Quality <100 MB (10-bit HEVC - Apple / Modern)")
+        RECIPE=hevc ;;
+    "Fast Hardware <100 MB (Apple Silicon VideoToolbox)")
+        RECIPE=hw ;;
+    "Visually Lossless Archival (10-bit HEVC CRF 16)")
+        RECIPE=archival ;;
     "Balanced - 1080p")
-        STEPS=(resize --max-edge 1920 convert --crf 24) ;;
+        RECIPE=balanced-1080p ;;
+    "Small - 720p")
+        RECIPE=small-720p ;;
+    "Smallest - 480p")
+        RECIPE=smallest-480p ;;
     "Original size, just compress")
-        STEPS=(convert --crf 24) ;;
+        RECIPE=crf ;;
     "Strip metadata only - no re-encode")
-        MODE=copy
+        RECIPE=copy
         SUFFIX=_stripped ;;
     "Balanced - 1080p, keep metadata")
-        PRE=(--preserve-metadata)
-        STEPS=(resize --max-edge 1920 convert --crf 24) ;;
+        RECIPE=balanced-1080p
+        KEEP_METADATA=1 ;;
     *) exit 0 ;;
 esac
+
+if [ "$KEEP_METADATA" -eq 1 ]; then
+    EXTRA_ARGS=(--preserve-metadata)
+fi
 
 # Re-encoding a long clip takes minutes with no progress indication beyond
 # Automator's menu-bar gear. One notification up front is the difference between
 # "working" and "did my right-click do anything". The stream-copy preset is
 # effectively instant, so it would only produce two notifications in a row.
-if [ "$MODE" = pipeline ]; then
+if [ "$RECIPE" != copy ]; then
     notify "Compressing" "$# file(s)..."
 fi
 
@@ -167,7 +211,7 @@ for f in "$@"; do
     base=$(/usr/bin/basename "$f")
     stem="${base%.*}"
 
-    if [ "$MODE" = copy ]; then
+    if [ "$RECIPE" = copy ]; then
         # Keep the source container: a stream copy into mp4 is only legal for
         # codecs mp4 can carry, and the point of this preset is to touch nothing
         # but the metadata. A file with no extension falls back to mp4, which
@@ -201,12 +245,8 @@ for f in "$@"; do
     # output from an earlier run can never be measured as if it were this one's.
     tmp="$dir/.${stem}${SUFFIX}.$$.$ext"
 
-    if [ "$MODE" = copy ]; then
-        "$VIDTOOLS" convert "$f" "$tmp" --copy 2>"$errfile"
-    else
-        "$VIDTOOLS" pipeline "${PRE[@]}" "$f" "$tmp" "${STEPS[@]}" 2>"$errfile"
-    fi
-    # Captured immediately. A bare `$?` after `fi` happens to carry the branch's
+    "$VIDTOOLS" compress --recipe "$RECIPE" "${EXTRA_ARGS[@]}" "$f" "$tmp" >/dev/null 2>"$errfile"
+    # Captured immediately. A bare `$?` after a command happens to carry the
     # exit code, but it is one inserted line away from silently meaning
     # something else, in the test that decides whether a file was compressed.
     #
@@ -263,7 +303,7 @@ $first_error"
     fail "$summary"
 fi
 
-if [ "$MODE" = copy ]; then
+if [ "$RECIPE" = copy ]; then
     msg="${ok} file(s), metadata removed"
 elif [ "$total_after" -gt 0 ]; then
     ratio=$(echo "scale=1; $total_before / $total_after" | /usr/bin/bc)

@@ -49,7 +49,7 @@ import structlog
 from numpy.lib.stride_tricks import sliding_window_view
 from PIL import Image, features
 
-from .image_ops import _open_image
+from .image_ops import _build_exif, _open_image
 from .progress import report_progress
 
 logger = structlog.get_logger(__name__)
@@ -345,7 +345,8 @@ def _pick_probe_crop(img: Image.Image, size: int = PROBE_SIZE) -> Image.Image:
 # encoding
 # ---------------------------------------------------------------------------
 
-def _encode(img: Image.Image, fmt: str, quality: int | None, lossless: bool) -> bytes:
+def _encode(img: Image.Image, fmt: str, quality: int | None, lossless: bool,
+            preserve_metadata: bool = False) -> bytes:
     """Encode to an in-memory buffer. Returns the encoded bytes."""
     save_kwargs: dict[str, object] = {}
     target = img
@@ -353,6 +354,13 @@ def _encode(img: Image.Image, fmt: str, quality: int | None, lossless: bool) -> 
     profile = img.info.get("icc_profile")
     if profile:
         save_kwargs["icc_profile"] = profile
+
+    exif = _build_exif(img, preserve_metadata)
+    if exif:
+        save_kwargs["exif"] = exif
+
+    if not preserve_metadata and fmt == "jpeg":
+        save_kwargs["comment"] = b""
 
     if fmt == "jpeg":
         if target.mode != "RGB":
@@ -480,12 +488,13 @@ def _search_quality(probe: Image.Image, fmt: str, target_ssim: float) -> int | N
     return best
 
 
-def _search_size(img: Image.Image, fmt: str, max_size: int) -> int | None:
+def _search_size(img: Image.Image, fmt: str, max_size: int,
+                 preserve_metadata: bool = False) -> int | None:
     """Highest quality whose full-size encode fits the byte budget, or None."""
     lo, hi, best = _Q_MIN, _Q_MAX, None
     while lo <= hi:
         mid = (lo + hi) // 2
-        if len(_encode(img, fmt, mid, lossless=False)) <= max_size:
+        if len(_encode(img, fmt, mid, lossless=False, preserve_metadata=preserve_metadata)) <= max_size:
             best, lo = mid, mid + 1
         else:
             hi = mid - 1
@@ -493,7 +502,8 @@ def _search_size(img: Image.Image, fmt: str, max_size: int) -> int | None:
 
 
 def _search_quality_full(img: Image.Image, fmt: str, target_ssim: float,
-                         lo: int = _Q_MIN, hi: int = _Q_MAX):
+                         lo: int = _Q_MIN, hi: int = _Q_MAX,
+                         preserve_metadata: bool = False):
     """Lowest quality in [lo, hi] whose FULL-RESOLUTION SSIM meets the target.
 
     The full image is authoritative. The probe crop is only ever used to narrow
@@ -513,7 +523,7 @@ def _search_quality_full(img: Image.Image, fmt: str, target_ssim: float,
     best_seen = None
     while lo <= hi:
         mid = (lo + hi) // 2
-        data = _encode(img, fmt, mid, lossless=False)
+        data = _encode(img, fmt, mid, lossless=False, preserve_metadata=preserve_metadata)
         score = _score(img, data)
         if best_seen is None or score > best_seen:
             best_seen = score
@@ -534,6 +544,7 @@ def recommend(
     allow_avif: bool = False,
     fit: str | None = None,
     formats: list[str] | None = None,
+    preserve_metadata: bool = False,
 ) -> CompressionReport:
     """Search candidate encodings and return a ranked, measured report.
 
@@ -589,7 +600,7 @@ def recommend(
     step = 0
 
     for fmt in lossless_fmts:
-        data = _encode(img, fmt, None, lossless=True)
+        data = _encode(img, fmt, None, lossless=True, preserve_metadata=preserve_metadata)
         candidates.append(Candidate(fmt=fmt, quality=None, lossless=True,
                                     size=len(data), ssim=1.0, data=data))
         step += 1
@@ -598,18 +609,19 @@ def recommend(
     for fmt in lossy_fmts:
         step += 1
         if max_size is not None:
-            quality = _search_size(img, fmt, max_size)
+            quality = _search_size(img, fmt, max_size, preserve_metadata=preserve_metadata)
             if quality is None:
                 report_progress(int(step / total_steps * 100), f"{fmt}: no setting fits")
                 continue
-            data = _encode(img, fmt, quality, lossless=False)
+            data = _encode(img, fmt, quality, lossless=False, preserve_metadata=preserve_metadata)
             score = _score(img, data)
         else:
             # The cheap probe narrows the bracket; the full image decides. A
             # probe that finds nothing means "start low", not "give up".
             hint = _search_quality(probe, fmt, effective_target)
             lo = max(_Q_MIN, hint - 8) if hint is not None else _Q_MIN
-            found, seen = _search_quality_full(img, fmt, effective_target, lo=lo)
+            found, seen = _search_quality_full(img, fmt, effective_target, lo=lo,
+                                               preserve_metadata=preserve_metadata)
             if seen is not None:
                 best_attempted = seen if best_attempted is None else max(best_attempted, seen)
             if found is None:
@@ -692,6 +704,7 @@ def compress_image(
     allow_avif: bool = False,
     fit: str | None = None,
     dry_run: bool = False,
+    preserve_metadata: bool = False,
 ) -> CompressionReport:
     """Compress an image, choosing the format automatically when unconstrained.
 
@@ -722,7 +735,7 @@ def compress_image(
 
     report = recommend(input_file, target_ssim=target_ssim, lossless=lossless,
                        max_size=max_size, allow_avif=allow_avif, fit=fit,
-                       formats=forced)
+                       formats=forced, preserve_metadata=preserve_metadata)
 
     # A *derived* name must never clobber. The caller did not choose it, so a
     # second run -- a different preset from the Finder Quick Action, say --

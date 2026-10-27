@@ -11,14 +11,14 @@
 # * One Finder entry, parameterised by a dialog, rather than one entry per
 #   operation. That is the convention macOS's own Convert Image follows, and it
 #   keeps the Quick Actions menu from filling up.
-# * Presets combine format, size and metadata into a single choice. AppleScript
-#   cannot draw a multi-control panel, and three sequential prompts to compress
-#   a file is worse than one list of sensible outcomes.
+# * Presets combine format and size into a single choice, paired with an AppKit
+#   NSAlert + NSPopUpButton dropdown and a "Keep source metadata" checkbox so
+#   every preset strips metadata by default and can opt in without extra prompts.
 # * PATH is minimal under Automator, so every binary is called by absolute path.
 # * zsh, not bash. /bin/bash on macOS is still 3.2.57, where `set -u` plus an
 #   empty-array expansion is a fatal "unbound variable" -- which would have hit
 #   exactly the one preset that passes no flags. zsh 5.9 is the platform default
-#   and handles it. Verified on macOS 26.5.2.
+#   and handles it. Verified on macOS 27.2.
 
 set -uo pipefail
 
@@ -61,22 +61,52 @@ fail() {
 
 # Preset labels are outcome-shaped ("Smallest", "Visually lossless") rather than
 # flag-shaped, because the person right-clicking a file is choosing a result.
+# Metadata is stripped by default across all presets; the native AppKit alert
+# provides a single "Keep source metadata" checkbox override alongside the
+# preset dropdown.
 CHOICE=$("$OSASCRIPT" <<'APPLESCRIPT'
+use framework "Foundation"
+use framework "AppKit"
+
 set options to {¬
     "Smallest - sized for AI vision (WebP)", ¬
     "Smallest - sized for AI vision (AVIF, not readable by AI tools)", ¬
     "Balanced (WebP)", ¬
     "Visually lossless (WebP)", ¬
-    "Lossless - exact pixels", ¬
-    "Balanced, keep metadata"}
-set picked to choose from list options ¬
-    with title "Compress Image" ¬
-    with prompt "How should these be compressed?" ¬
-    default items {"Smallest - sized for AI vision (WebP)"}
-if picked is false then return "CANCELLED"
-return item 1 of picked
+    "Lossless - exact pixels"}
+
+current application's NSApplication's sharedApplication()'s activateIgnoringOtherApps:true
+
+set alert to current application's NSAlert's alloc()'s init()
+alert's setMessageText:"Compress Image"
+alert's setInformativeText:"How should these be compressed? (Metadata is stripped by default.)"
+alert's addButtonWithTitle:"Compress"
+alert's addButtonWithTitle:"Cancel"
+alert's setShowsSuppressionButton:true
+alert's suppressionButton()'s setTitle:"Keep source metadata"
+alert's suppressionButton()'s setState:(current application's NSControlStateValueOff)
+
+set popup to current application's NSPopUpButton's alloc()'s initWithFrame:{{0, 0}, {360, 26}} pullsDown:false
+popup's addItemsWithTitles:options
+popup's selectItemWithTitle:"Smallest - sized for AI vision (WebP)"
+alert's setAccessoryView:popup
+
+set btn to alert's runModal()
+if btn is not (current application's NSAlertFirstButtonReturn) then return "CANCELLED"
+set picked to (popup's titleOfSelectedItem()) as text
+set keepMeta to (alert's suppressionButton()'s state()) as integer
+if keepMeta is 1 then return picked & "|KEEP_META"
+return picked
 APPLESCRIPT
 )
+
+KEEP_METADATA=0
+case "$CHOICE" in
+    *"|KEEP_META")
+        KEEP_METADATA=1
+        CHOICE="${CHOICE%|KEEP_META}"
+        ;;
+esac
 
 if [ "$CHOICE" = "CANCELLED" ] || [ -z "$CHOICE" ]; then
     exit 0
@@ -92,6 +122,10 @@ case "$CHOICE" in
     "Balanced, keep metadata")                ARGS=(--preserve-metadata) ;;
     *) exit 0 ;;
 esac
+
+if [ "$KEEP_METADATA" -eq 1 ]; then
+    ARGS+=(--preserve-metadata)
+fi
 
 ok=0
 failed=0

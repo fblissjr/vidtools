@@ -342,3 +342,37 @@ def test_script_is_zsh_not_bash():
 def test_script_keeps_the_placeholder():
     """An absolute binary path committed here would be a path leak."""
     assert "@VIDTOOLS_BIN@" in SCRIPT.read_text()
+
+
+@pytest.mark.parametrize(
+    "choice,expected",
+    [(k, v) for k, v in PRESETS.items() if "keep metadata" not in k],
+    ids=lambda v: str(v)[:28],
+)
+def test_keep_metadata_checkbox_appends_preserve_metadata_to_every_preset(
+    harness, tmp_path, choice, expected
+):
+    """The AppKit NSAlert suppression checkbox appends `|KEEP_META` to the chosen
+    preset title, allowing any preset to keep metadata without duplicating menu items."""
+    run, argfile = harness
+    img = _image(tmp_path)
+    r = run(f"{choice}|KEEP_META", img)
+    assert r.returncode == 0, r.stderr
+    recorded = argfile.read_text().split()
+    assert recorded[0] == "compress"
+    assert recorded[1:1 + len(expected) + 1] == [*expected, "--preserve-metadata"]
+
+
+def test_embedded_applescript_compiles_cleanly(tmp_path):
+    """Because the test harness stubs osascript to avoid drawing modal GUI
+    windows, a syntax error in the embedded AppKit AppleScript block would pass
+    every stubbed test and fail at right-click time. `/usr/bin/osacompile`
+    verifies the AppleScript/ObjC syntax without executing `runModal()`."""
+    text = SCRIPT.read_text()
+    block = text.split("<<'APPLESCRIPT'\n", 1)[1].split("\nAPPLESCRIPT", 1)[0]
+    scpt = tmp_path / "dialog.scpt"
+    r = subprocess.run(
+        ["/usr/bin/osacompile", "-o", str(scpt), "-"],
+        input=block, capture_output=True, text=True,
+    )
+    assert r.returncode == 0, f"AppleScript syntax error: {r.stderr}"

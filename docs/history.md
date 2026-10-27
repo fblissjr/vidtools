@@ -1,6 +1,6 @@
 # Defect history
 
-The incidents behind the rules in `CLAUDE.md`. `CLAUDE.md` says what to do;
+The incidents behind the rules in `AGENTS.md`. `AGENTS.md` says what to do;
 this file says why, so the rules can be judged rather than obeyed blindly.
 `CHANGELOG.md` remains the per-release record.
 
@@ -8,7 +8,7 @@ this file says why, so the rules can be judged rather than obeyed blindly.
 
 The feature has failed in at least seven distinct layers, each one different
 from the layer the previous fix touched. That pattern is the reason
-`CLAUDE.md` insists on checking the OS's view rather than the layer just
+`AGENTS.md` insists on checking the OS's view rather than the layer just
 edited.
 
 1. **Shell semantics.** `/bin/bash` on macOS is 3.2.57, where `set -u` plus an
@@ -30,7 +30,7 @@ edited.
 5. **The environment underneath.** An editable install pointed at a package
    directory that no longer existed. The action was correct and had nothing to
    call; `-x` on the binary still passed. Hence the `--help` pre-flight.
-6. **The enable record** (described in `CLAUDE.md` as the seventh layer). A
+6. **The enable record** (described in `AGENTS.md` as the seventh layer). A
    complete, registered bundle stayed invisible in both the Finder menu and
    System Settings because nothing had written its `NSServicesStatus` entry in
    the `pbs` preference domain. No inspection of the bundle could find it: the
@@ -71,6 +71,14 @@ Other incidents from the same feature:
   portrait phone photos sideways.
 - **0.30.0: `slideshow` did the same thing** from `video_ops`, outside the
   module the rule was written for. The rule now applies everywhere.
+- **0.31.0: `compress` encoded candidates without calling `_build_exif`** and
+  never exposed `--preserve-metadata` on the CLI, so even though `_open_image`
+  returned `raw_exif`, every candidate encode dropped it. Both `compress_image`
+  and `compress_video` now wire `preserve_metadata` end to end.
+- **0.31.0: 2-pass 10-bit `libx265` requires `-pix_fmt yuv420p10le` on Pass 1
+  as well as Pass 2.** Omitting it on Pass 1 when the input is 8-bit causes
+  Pass 2 to abort with exit code 183 (`different bit depth / csp in stats
+  file`).
 
 ## Errors reaching the user as tracebacks
 
@@ -104,7 +112,7 @@ empty-array crash.
 ## Documentation drift
 
 - `README.md` claimed three verbs still leaked metadata for three versions
-  after they were fixed, because it duplicates the verb list in `CLAUDE.md`.
+  after they were fixed, because it duplicates the verb list in `AGENTS.md`.
 - **0.30.0:** the pipeline's resize step redeclared the verb's flags by hand and
   drifted -- no `--algorithm` choices, no mutual exclusion between sizing
   flags. Both parsers now share `_add_resize_flags` / `_add_crop_flags`.

@@ -116,7 +116,7 @@ def build_action(script: str, kind: str = "image") -> dict:
 def build_workflow(script: str, kind: str = "image") -> dict:
     """Return the complete .wflow document."""
     return {
-        "AMApplicationBuild": "526",
+        "AMApplicationBuild": "541",
         "AMApplicationVersion": "2.10",
         "AMDocumentVersion": "2",
         "actions": [build_action(script, kind)],

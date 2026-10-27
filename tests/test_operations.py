@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 
 from vidtools.operations import (
+    VIDEO_COMPRESS_RECIPES,
     add_audio,
+    compress_video,
     convert_format,
     extract_audio,
     extract_frames,
@@ -488,7 +490,7 @@ class TestNoProgressCallbackParam:
     OPS = [
         "resize_video", "cut_video", "convert_format", "extract_audio",
         "crop_video", "rotate_video", "concatenate_videos", "sanitize_video",
-        "create_slideshow", "add_audio", "trim_to_audio",
+        "create_slideshow", "add_audio", "trim_to_audio", "compress_video",
     ]
 
     def test_no_progress_callback_in_signatures(self):
@@ -697,6 +699,8 @@ class TestMetadataPolicyShape:
         cmd = capture[-1]
         assert "-map_metadata" in cmd, f"{op} does not strip container metadata"
         assert cmd[cmd.index("-map_metadata") + 1] == "-1"
+        assert "-map_chapters" in cmd and cmd[cmd.index("-map_chapters") + 1] == "-1"
+        assert "-fflags" in cmd and "+bitexact" in cmd[cmd.index("-fflags") + 1]
 
     @pytest.mark.parametrize("op", [
         "cut_video", "resize_video", "crop_video", "rotate_video",
@@ -757,3 +761,165 @@ def test_extract_frames_strips_metadata(capture_ffmpeg):
 def test_extract_frames_preserve_metadata(capture_ffmpeg):
     extract_frames("in.mp4", "f_%03d.png", preserve_metadata=True)
     assert "-map_metadata" not in capture_ffmpeg[0]
+
+
+class TestCompressVideo:
+    """Tests for compress_video recipes, smart <100 MB budget handling, and deep metadata stripping."""
+
+    def _mock_probe(self, monkeypatch, duration=10.0, size_bytes=5_000_000):
+        info = {
+            "streams": [{"codec_type": "video", "duration": str(duration)}],
+            "format": {"duration": str(duration), "size": str(size_bytes)},
+        }
+        monkeypatch.setattr("vidtools.video_ops.get_video_info", lambda _: info)
+        monkeypatch.setattr("vidtools.video_ops.require_encoder", lambda _: None)
+
+    def test_universal_short_clip_uses_one_pass_crf_not_bloated_bitrate(
+        self, capture_ffmpeg, monkeypatch
+    ):
+        """A 10-second 5 MB clip under the 95 MB budget must use 1-pass CRF 23
+        with VBV maxrate ceiling rather than 2-pass at ~75 Mbps."""
+        self._mock_probe(monkeypatch, duration=10.0, size_bytes=5_000_000)
+        compress_video("in.mp4", "out.mp4", recipe="universal")
+        assert len(capture_ffmpeg) == 1
+        cmd = capture_ffmpeg[0]
+        assert cmd[cmd.index("-c:v") + 1] == "libx264"
+        assert cmd[cmd.index("-crf") + 1] == "23"
+        assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
+        assert "-maxrate" in cmd and "-bufsize" in cmd
+        assert "-bsf:v" in cmd and cmd[cmd.index("-bsf:v") + 1] == "filter_units=remove_types=6"
+        assert "-map_chapters" in cmd and cmd[cmd.index("-map_chapters") + 1] == "-1"
+        assert "encoder=" in cmd
+
+    def test_universal_over_budget_uses_two_pass_target_bitrate(
+        self, capture_ffmpeg, monkeypatch
+    ):
+        """A 300-second 250 MB video (>95 MB budget) runs 2-pass libx264 with
+        target bitrate and a temp passlogfile."""
+        self._mock_probe(monkeypatch, duration=300.0, size_bytes=250_000_000)
+        compress_video("in.mp4", "out.mp4", recipe="universal")
+        assert len(capture_ffmpeg) == 2
+        pass1, pass2 = capture_ffmpeg
+        assert "-pass" in pass1 and pass1[pass1.index("-pass") + 1] == "1"
+        assert "-pass" in pass2 and pass2[pass2.index("-pass") + 1] == "2"
+        assert pass1[pass1.index("-passlogfile") + 1] == pass2[pass2.index("-passlogfile") + 1]
+        assert "-b:v" in pass1 and "-b:v" in pass2
+        # 95 MB = 760,000 kbits; over 300s = 2533 kbps total - 192 kbps audio = 2341k
+        assert pass2[pass2.index("-b:v") + 1] == "2341k"
+
+    def test_one_pass_fallback_to_two_pass_when_output_exceeds_max_size(
+        self, monkeypatch, tmp_path
+    ):
+        """If a source is under budget_bytes (e.g. 92 MB) but 1-pass CRF writes
+        an output > max_size (100 MB), compress_video must fall back to 2-pass."""
+        self._mock_probe(monkeypatch, duration=120.0, size_bytes=90_000_000)
+        out = tmp_path / "out.mp4"
+        calls = []
+
+        def fake_run(cmd):
+            calls.append(list(cmd))
+            if len(calls) == 1:
+                # 1-pass wrote 105 MB (> 100 MB ceiling)
+                out.write_bytes(b"x")
+                os_stat_override["size"] = 105_000_000
+            elif cmd[-1] == str(out):
+                os_stat_override["size"] = 94_000_000
+
+        os_stat_override = {"size": 0}
+        monkeypatch.setattr("vidtools.video_ops.run_ffmpeg", fake_run)
+        monkeypatch.setattr("vidtools.video_ops.os.path.getsize", lambda _: os_stat_override["size"])
+
+        compress_video("in.mp4", str(out), recipe="universal")
+        # 1 call for 1-pass + 2 calls for 2-pass fallback = 3 calls
+        assert len(calls) == 3
+        assert "-crf" in calls[0]
+        assert "-pass" in calls[1] and "-pass" in calls[2]
+
+    def test_hevc_two_pass_keeps_10bit_pix_fmt_on_both_passes(
+        self, capture_ffmpeg, monkeypatch
+    ):
+        """libx265 fails on Pass 2 with exit code 183 ('different bit depth / csp
+        in stats file') if Pass 1 omits -pix_fmt yuv420p10le on an 8-bit source."""
+        self._mock_probe(monkeypatch, duration=200.0, size_bytes=200_000_000)
+        compress_video("in.mp4", "out.mp4", recipe="hevc")
+        assert len(capture_ffmpeg) == 2
+        for cmd in capture_ffmpeg:
+            assert cmd[cmd.index("-c:v") + 1] == "libx265"
+            assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p10le"
+            assert cmd[cmd.index("-tag:v") + 1] == "hvc1"
+            x265_p = cmd[cmd.index("-x265-params") + 1]
+            assert "no-info=1" in x265_p
+            assert "stats=" in x265_p
+
+    def test_hw_recipe_uses_videotoolbox_on_darwin(
+        self, capture_ffmpeg, monkeypatch
+    ):
+        self._mock_probe(monkeypatch, duration=200.0, size_bytes=200_000_000)
+        monkeypatch.setattr("vidtools.video_ops.platform.system", lambda: "Darwin")
+        monkeypatch.setattr("vidtools.video_ops._ffmpeg_has_encoder", lambda _: True)
+        compress_video("in.mp4", "out.mp4", recipe="hw")
+        assert len(capture_ffmpeg) == 1
+        cmd = capture_ffmpeg[0]
+        assert cmd[cmd.index("-c:v") + 1] == "hevc_videotoolbox"
+        assert cmd[cmd.index("-tag:v") + 1] == "hvc1"
+        assert "-b:v" in cmd and "-maxrate" in cmd and "-bufsize" in cmd
+        assert cmd[cmd.index("-c:a") + 1] == "aac_at"
+
+    def test_archival_recipe_uses_10bit_hevc_crf16_aq_mode_3(
+        self, capture_ffmpeg, monkeypatch
+    ):
+        monkeypatch.setattr("vidtools.video_ops.require_encoder", lambda _: None)
+        compress_video("in.mp4", "out.mp4", recipe="archival")
+        cmd = capture_ffmpeg[0]
+        assert cmd[cmd.index("-c:v") + 1] == "libx265"
+        assert cmd[cmd.index("-crf") + 1] == "16"
+        assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p10le"
+        assert cmd[cmd.index("-tag:v") + 1] == "hvc1"
+        assert cmd[cmd.index("-b:a") + 1] == "320k"
+        x265_p = cmd[cmd.index("-x265-params") + 1]
+        assert "aq-mode=3" in x265_p and "no-info=1" in x265_p
+
+    @pytest.mark.parametrize("recipe,edge,crf,abitrate", [
+        ("balanced-1080p", 1920, "23", "192k"),
+        ("small-720p", 1280, "25", "192k"),
+        ("smallest-480p", 854, "28", "128k"),
+    ])
+    def test_resolution_capped_recipes(
+        self, capture_ffmpeg, monkeypatch, recipe, edge, crf, abitrate
+    ):
+        monkeypatch.setattr("vidtools.video_ops.require_encoder", lambda _: None)
+        compress_video("in.mp4", "out.mp4", recipe=recipe)
+        cmd = capture_ffmpeg[0]
+        vf = cmd[cmd.index("-vf") + 1]
+        assert f"min(iw,{edge})" in vf and f"min(ih,{edge})" in vf
+        assert cmd[cmd.index("-crf") + 1] == crf
+        assert cmd[cmd.index("-b:a") + 1] == abitrate
+        assert cmd[cmd.index("-bsf:v") + 1] == "filter_units=remove_types=6"
+
+    def test_copy_recipe_stream_copies_and_strips_metadata(self, capture_ffmpeg):
+        compress_video("in.mp4", "out.mp4", recipe="copy")
+        cmd = capture_ffmpeg[0]
+        assert cmd[cmd.index("-c") + 1] == "copy"
+        assert "-map_metadata" in cmd and "-map_chapters" in cmd
+        assert "encoder=" in cmd
+        assert "-bsf:v" not in cmd
+
+    def test_preserve_metadata_omits_strip_and_sei_flags(
+        self, capture_ffmpeg, monkeypatch
+    ):
+        self._mock_probe(monkeypatch, duration=10.0, size_bytes=5_000_000)
+        compress_video("in.mp4", "out.mp4", recipe="universal", preserve_metadata=True)
+        cmd = capture_ffmpeg[0]
+        assert "-map_metadata" not in cmd
+        assert "-map_chapters" not in cmd
+        assert "-bsf:v" not in cmd
+        assert "encoder=" not in cmd
+
+    def test_rejects_unknown_recipe(self):
+        with pytest.raises(ValueError, match="Unknown video compression recipe"):
+            compress_video("in.mp4", "out.mp4", recipe="nonexistent")
+        assert len(VIDEO_COMPRESS_RECIPES) == 9
+
+    def test_rejects_max_edge_with_copy_recipe(self):
+        with pytest.raises(ValueError, match="copy"):
+            compress_video("in.mp4", "out.mp4", recipe="copy", max_edge=1280)
